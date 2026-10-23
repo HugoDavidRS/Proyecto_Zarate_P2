@@ -6,13 +6,16 @@ enum class AngleMode { DEG, RAD, GRAD }
 
 object CalculatorEngine {
 
-    fun evaluate(expr: String, angleMode: AngleMode): Double {
+    fun evaluate(expr: String, angleMode: AngleMode, x: Double? = null): Double {
         if (expr.isBlank()) throw IllegalArgumentException("Empty")
         val normalized = expr
             .replace("×", "*").replace("÷", "/").replace("−", "-")
-            .replace("π", "pi").replace("φ", "phi")
+            .replace("π", "(pi)").replace("φ", "(phi)")
+            .replace("√", "sqrt").replace("∛", "cbrt")
             .trim()
-        val result = Parser(normalized, angleMode).parseExpr()
+        val parser = Parser(normalized, angleMode, x)
+        val result = parser.parseExpr()
+        if (!parser.atEnd()) throw IllegalArgumentException("Sintaxis")
         if (result.isNaN()) throw ArithmeticException("NaN")
         return result
     }
@@ -25,21 +28,52 @@ object CalculatorEngine {
         return when {
             v == floor(v) && abs < 1e15 -> v.toLong().toString()
             abs >= 1e-6 && abs < 1e12 -> {
-                val s = "%.10g".format(v)
+                val s = "%.10g".format(java.util.Locale.US, v)
                 if ('e' in s || 'E' in s) s
                 else s.trimEnd('0').trimEnd('.')
             }
             else -> {
-                val s = "%.6e".format(v)
+                val s = "%.6e".format(java.util.Locale.US, v)
                 s.replace(Regex("e([+-])0+(\\d)"), "e$1$2")
                     .replace("e+", "×10^").replace("e-", "×10^-")
             }
         }
     }
+
+    /** Simple fraction (e.g. "1/3") via continued fractions, or null if none fits. */
+    fun toFraction(v: Double, maxDen: Long = 10_000): String? {
+        if (v.isNaN() || v.isInfinite() || v == floor(v) || abs(v) > 1e9) return null
+        val target = abs(v)
+        var h0 = 0L; var h1 = 1L; var k0 = 1L; var k1 = 0L
+        var x = target
+        repeat(30) {
+            val a = floor(x).toLong()
+            val h2 = a * h1 + h0; val k2 = a * k1 + k0
+            if (k2 > maxDen) return null
+            h0 = h1; h1 = h2; k0 = k1; k1 = k2
+            if (abs(h1.toDouble() / k1 - target) < 1e-9 * max(1.0, target)) {
+                return if (k1 == 1L) null else "${if (v < 0) "-" else ""}$h1/$k1"
+            }
+            val frac = x - a
+            if (frac < 1e-12) return null
+            x = 1 / frac
+        }
+        return null
+    }
 }
 
-private class Parser(private val s: String, private val mode: AngleMode) {
+private val NAMES = setOf(
+    "pi", "e", "phi", "inf", "x", "rand",
+    "sin", "cos", "tan", "asin", "arcsin", "acos", "arccos", "atan", "arctan", "atan2",
+    "sinh", "cosh", "tanh", "asinh", "acosh", "atanh",
+    "sqrt", "cbrt", "exp", "log", "log10", "log2", "ln", "abs", "ceil", "floor", "round", "sign", "rec",
+    "ncr", "npr", "gcd", "lcm", "max", "min", "pow", "hypot", "logb"
+)
+
+private class Parser(private val s: String, private val mode: AngleMode, private val xVal: Double?) {
     var i = 0
+
+    fun atEnd(): Boolean { skipSpaces(); return i >= s.length }
 
     fun parseExpr(): Double {
         var v = parseTerm()
@@ -122,17 +156,27 @@ private class Parser(private val s: String, private val mode: AngleMode) {
             if (s[i] == '+' || s[i] == '-') i++
             while (i < s.length && s[i].isDigit()) i++
         }
-        return s.substring(start, i).toDouble()
+        return s.substring(start, i).toDoubleOrNull()
+            ?: throw IllegalArgumentException("Número inválido")
     }
 
     private fun parseWord(): Double {
         val start = i
-        while (i < s.length && (s[i].isLetter() || s[i].isDigit() || s[i] == '_')) i++
-        return when (s.substring(start, i).lowercase()) {
+        while (i < s.length && (s[i].isLetterOrDigit() || s[i] == '_')) i++
+        var word = s.substring(start, i).lowercase()
+        if (word !in NAMES) {
+            // Adjacent names like "esin" or "xcos": take the longest known prefix
+            word = NAMES.filter { word.startsWith(it) }.maxByOrNull { it.length }
+                ?: throw IllegalArgumentException("Unknown: $word")
+            i = start + word.length
+        }
+        return when (word) {
             "pi" -> PI
             "e" -> E
             "phi" -> (1.0 + sqrt(5.0)) / 2.0
             "inf" -> Double.POSITIVE_INFINITY
+            "x" -> xVal ?: throw IllegalArgumentException("x sin valor")
+            "rand" -> Math.random()
             "sin" -> sin(toRad(oneArg()))
             "cos" -> cos(toRad(oneArg()))
             "tan" -> { val a = toRad(oneArg()); if (abs(cos(a)) < 1e-10) Double.NaN else tan(a) }
@@ -155,7 +199,7 @@ private class Parser(private val s: String, private val mode: AngleMode) {
             "abs" -> abs(oneArg())
             "ceil" -> ceil(oneArg())
             "floor" -> floor(oneArg())
-            "round" -> round(oneArg()).toDouble()
+            "round" -> round(oneArg())
             "sign" -> sign(oneArg())
             "rec" -> { val x = oneArg(); if (x == 0.0) Double.POSITIVE_INFINITY else 1.0 / x }
             "ncr" -> { val (n, r) = twoArgs(); combinations(n, r) }
@@ -167,7 +211,7 @@ private class Parser(private val s: String, private val mode: AngleMode) {
             "pow" -> { val (a, b) = twoArgs(); a.pow(b) }
             "hypot" -> { val (a, b) = twoArgs(); hypot(a, b) }
             "logb" -> { val (base, x) = twoArgs(); if (x <= 0 || base <= 0 || base == 1.0) Double.NaN else log(x, base) }
-            else -> throw IllegalArgumentException("Unknown: ${s.substring(start, i)}")
+            else -> throw IllegalArgumentException("Unknown: $word")
         }
     }
 
@@ -180,7 +224,8 @@ private class Parser(private val s: String, private val mode: AngleMode) {
     private fun twoArgs(): Pair<Double, Double> {
         skipSpaces()
         if (!eat('(')) throw IllegalArgumentException("Expected '('")
-        val a = parseExpr(); skipSpaces(); eat(',')
+        val a = parseExpr(); skipSpaces()
+        if (!eat(',')) throw IllegalArgumentException("Expected ','")
         val b = parseExpr(); skipSpaces(); eat(')'); return a to b
     }
 
