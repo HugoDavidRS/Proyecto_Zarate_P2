@@ -1,6 +1,9 @@
 package com.example.proyectoparcial2
 
 import android.annotation.SuppressLint
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
+import android.os.Build
 import android.os.Bundle
 import android.view.View
 import android.view.WindowManager
@@ -8,9 +11,11 @@ import android.webkit.WebChromeClient
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.widget.FrameLayout
+import android.widget.LinearLayout
+import android.widget.TextView
 import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
-
 class DoomActivity : ComponentActivity() {
 
     private lateinit var webView: WebView
@@ -19,38 +24,45 @@ class DoomActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // Full screen, keep screen on
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        @Suppress("DEPRECATION")
         window.decorView.systemUiVisibility = (
             View.SYSTEM_UI_FLAG_FULLSCREEN or
-            View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or
-            View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+            View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
         )
 
-        webView = WebView(this).also { wv ->
-            wv.settings.apply {
-                javaScriptEnabled = true
-                domStorageEnabled = true
-                allowFileAccess = true
-                allowContentAccess = true
-                @Suppress("DEPRECATION")
-                allowFileAccessFromFileURLs = true
-                @Suppress("DEPRECATION")
-                allowUniversalAccessFromFileURLs = true
-                mediaPlaybackRequiresUserGesture = false
-                mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
-                cacheMode = WebSettings.LOAD_DEFAULT
-                databaseEnabled = true
-                loadWithOverviewMode = true
-                useWideViewPort = true
-                setSupportZoom(false)
-                builtInZoomControls = false
-            }
-            wv.webChromeClient = WebChromeClient()
-            wv.webViewClient = WebViewClient()
-            wv.setLayerType(View.LAYER_TYPE_HARDWARE, null)
-            wv.loadUrl("file:///android_asset/doom/index.html")
+        if (!isNetworkAvailable()) {
+            showNoInternet()
+            return
         }
+
+        webView = WebView(this)
+        webView.layoutParams = FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.MATCH_PARENT,
+            FrameLayout.LayoutParams.MATCH_PARENT
+        )
+
+        @SuppressLint("SetJavaScriptEnabled")
+        webView.settings.apply {
+            javaScriptEnabled = true
+            domStorageEnabled = true
+            allowFileAccess = true
+            allowContentAccess = true
+            mediaPlaybackRequiresUserGesture = false
+            mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+            cacheMode = WebSettings.LOAD_DEFAULT
+            databaseEnabled = true
+            loadWithOverviewMode = true
+            useWideViewPort = true
+            setSupportZoom(true)
+            builtInZoomControls = false
+        }
+        webView.webChromeClient = WebChromeClient()
+        webView.webViewClient = WebViewClient()
+        webView.setLayerType(View.LAYER_TYPE_HARDWARE, null)
+
+        // Internet Archive hosts DOOM shareware with a working browser emulator
+        webView.loadUrl("https://archive.org/embed/doom-dos")
 
         setContentView(webView)
 
@@ -61,18 +73,46 @@ class DoomActivity : ComponentActivity() {
         })
     }
 
-    override fun onResume() {
-        super.onResume()
-        webView.onResume()
+    private fun showNoInternet() {
+        val layout = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(0xFF0A0A0A.toInt())
+            gravity = android.view.Gravity.CENTER
+            setPadding(48, 48, 48, 48)
+        }
+        val title = TextView(this).apply {
+            text = "DOOM"
+            textSize = 48f
+            setTextColor(0xFFFF2200.toInt())
+            gravity = android.view.Gravity.CENTER
+        }
+        val msg = TextView(this).apply {
+            text = "Internet connection required\nto load DOOM for the first time.\n\nConnect to Wi-Fi and try again."
+            textSize = 16f
+            setTextColor(0xFF888888.toInt())
+            gravity = android.view.Gravity.CENTER
+            setPadding(0, 32, 0, 0)
+        }
+        layout.addView(title)
+        layout.addView(msg)
+        setContentView(layout)
     }
 
-    override fun onPause() {
-        webView.onPause()
-        super.onPause()
+    private fun isNetworkAvailable(): Boolean {
+        val cm = getSystemService(CONNECTIVITY_SERVICE) as ConnectivityManager
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            cm.getNetworkCapabilities(cm.activeNetwork)
+                ?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) == true
+        } else {
+            @Suppress("DEPRECATION")
+            cm.activeNetworkInfo?.isConnected == true
+        }
     }
 
+    override fun onResume() { super.onResume(); if (::webView.isInitialized) webView.onResume() }
+    override fun onPause() { if (::webView.isInitialized) webView.onPause(); super.onPause() }
     override fun onDestroy() {
-        webView.apply { stopLoading(); destroy() }
+        if (::webView.isInitialized) { webView.stopLoading(); webView.destroy() }
         super.onDestroy()
     }
 }

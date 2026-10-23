@@ -31,7 +31,6 @@
             android:name=".DoomActivity"
             android:exported="false"
             android:label="DOOM"
-            android:screenOrientation="landscape"
             android:hardwareAccelerated="true"
             android:configChanges="orientation|screenSize|keyboardHidden" />
 
