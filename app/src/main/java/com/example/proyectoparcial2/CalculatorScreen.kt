@@ -1,5 +1,6 @@
 package com.example.proyectoparcial2
 
+import android.content.Intent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.shrinkVertically
@@ -13,6 +14,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -39,9 +41,10 @@ private val TextPrimary   = Color(0xFFFFFFFF)
 private val TextSecondary = Color(0xFF8E8E93)
 private val TextOp        = Color(0xFFFFFFFF)
 private val ErrorColor    = Color(0xFFFF453A)
+private val DoomColor     = Color(0xFFB22222) // blood red
 
 // ── Button definition ─────────────────────────────────────────────────────────
-private enum class BtnType { Num, Op, Equal, Func, Clear, Mem, Special }
+private enum class BtnType { Num, Op, Equal, Func, Clear, Mem, Special, Doom }
 
 private data class BtnDef(
     val label: String,
@@ -53,6 +56,7 @@ private data class BtnDef(
 
 @Composable
 fun CalculatorScreen() {
+    val context = LocalContext.current
     var expression by remember { mutableStateOf("") }
     var result by remember { mutableStateOf("") }
     var angleMode by remember { mutableStateOf(AngleMode.DEG) }
@@ -134,6 +138,7 @@ fun CalculatorScreen() {
             }
             "Ans" -> expression += "Ans"
             "HIST" -> showHistory = !showHistory
+            "DOOM" -> context.startActivity(Intent(context, DoomActivity::class.java))
             else -> {
                 isError = false
                 expression += action
@@ -144,6 +149,7 @@ fun CalculatorScreen() {
     // Button grid definition (label, action, type, secondLabel, secondAction)
     val row0 = listOf(
         BtnDef(angleMode.name, action = "DEG", type = BtnType.Special),
+        BtnDef("DOOM", action = "DOOM", type = BtnType.Doom),
         BtnDef("(", type = BtnType.Clear),
         BtnDef(")", type = BtnType.Clear),
         BtnDef("%", type = BtnType.Clear),
@@ -355,6 +361,7 @@ private fun BtnRow(modifier: Modifier, buttons: List<BtnDef>, isSecond: Boolean,
             val isSecondBtn = btn.label == "2nd"
             val bgColor = when {
                 isSecondBtn && isSecond -> SecondActive
+                btn.type == BtnType.Doom -> DoomColor
                 btn.type == BtnType.Num -> NumColor
                 btn.type == BtnType.Op -> OpColor
                 btn.type == BtnType.Clear -> ClearColor
@@ -367,6 +374,7 @@ private fun BtnRow(modifier: Modifier, buttons: List<BtnDef>, isSecond: Boolean,
                 BtnType.Op -> TextOp
                 BtnType.Clear -> TextPrimary
                 BtnType.Mem -> TextSecondary
+                BtnType.Doom -> TextPrimary
                 else -> if (isSecond && btn.label != "2nd") OpColor else TextPrimary
             }
             CalcBtn(
