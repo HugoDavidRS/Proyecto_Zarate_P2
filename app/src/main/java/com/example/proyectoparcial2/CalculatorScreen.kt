@@ -1,5 +1,6 @@
 package com.example.proyectoparcial2
 
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.*
 import androidx.compose.animation.expandVertically
@@ -8,7 +9,9 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -17,6 +20,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
@@ -24,6 +28,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalClipboardManager
@@ -211,23 +216,27 @@ fun CalculatorScreen() {
             }
 
             // Display
-            Column(
+            Box(
                 Modifier
                     .weight(2.5f)
                     .fillMaxWidth()
-                    .offset(x = shakeOffset.value.dp)
-                    .combinedClickable(
-                        interactionSource = remember { MutableInteractionSource() },
-                        indication = null,
-                        onClick = {},
-                        onLongClick = {
-                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                            themeIndex = (themeIndex + 1) % THEMES.size
-                            showBanner = true
-                        }
+                    .background(
+                        Brush.verticalGradient(
+                            listOf(Color(0xFF111113), BgColor)
+                        )
                     )
-                    .padding(horizontal = 14.dp, vertical = 6.dp)
             ) {
+                // Thin accent line at top
+                Box(
+                    Modifier.fillMaxWidth().height(2.dp)
+                        .background(theme.accent.copy(alpha = 0.5f))
+                )
+                Column(
+                    Modifier
+                        .fillMaxSize()
+                        .offset(x = shakeOffset.value.dp)
+                        .padding(horizontal = 14.dp, vertical = 6.dp)
+                ) {
                 // Badges + history
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically) {
@@ -236,13 +245,34 @@ fun CalculatorScreen() {
                         if (hasMemory) ThemeBadge("M", Color(0xFF30D158))
                         if (isSecond)  ThemeBadge("2nd", theme.accent)
                     }
-                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp),
                         verticalAlignment = Alignment.CenterVertically) {
-                        Text("🎨", fontSize = 12.sp, modifier = Modifier.combinedClickable(
-                            interactionSource = remember { MutableInteractionSource() },
-                            indication = null, onClick = {},
-                            onLongClick = {}
-                        ))
+                        // Theme picker button — tap to cycle
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(5.dp),
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(theme.accent.copy(alpha = 0.15f))
+                                .combinedClickable(
+                                    interactionSource = remember { MutableInteractionSource() },
+                                    indication = null,
+                                    onClick = {
+                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                        themeIndex = (themeIndex + 1) % THEMES.size
+                                        showBanner = true
+                                    },
+                                    onLongClick = {}
+                                )
+                                .padding(horizontal = 8.dp, vertical = 4.dp)
+                        ) {
+                            Box(
+                                Modifier.size(8.dp).clip(CircleShape)
+                                    .background(theme.accent)
+                            )
+                            Text("Tema", color = theme.accent, fontSize = 11.sp,
+                                fontWeight = FontWeight.SemiBold)
+                        }
                         Text(
                             if (showHistory) "▲" else "▼ Historial",
                             color = TextSecondary, fontSize = 12.sp,
@@ -267,30 +297,40 @@ fun CalculatorScreen() {
                     )
                 }
 
-                // Result (long-press to copy)
+                // Result (long-press to copy, animates on change)
                 if (result.isNotEmpty()) {
-                    Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-                        horizontalArrangement = Arrangement.End) {
-                        Text(
-                            result,
-                            color = if (isError) ErrorColor else TextPrimary,
-                            fontSize = adaptFontSize(result), fontWeight = FontWeight.Light,
-                            maxLines = 1, textAlign = TextAlign.End,
-                            modifier = Modifier.combinedClickable(
-                                interactionSource = remember { MutableInteractionSource() },
-                                indication = null, onClick = {},
-                                onLongClick = {
-                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                    clipboard.setText(AnnotatedString(result))
-                                    showCopied = true
-                                }
+                    AnimatedContent(
+                        targetState = result,
+                        transitionSpec = {
+                            fadeIn(tween(180)) togetherWith fadeOut(tween(120))
+                        },
+                        label = "result_anim",
+                        modifier = Modifier.fillMaxWidth()
+                    ) { displayResult ->
+                        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.End) {
+                            Text(
+                                displayResult,
+                                color = if (isError) ErrorColor else TextPrimary,
+                                fontSize = adaptFontSize(displayResult), fontWeight = FontWeight.Light,
+                                maxLines = 1, textAlign = TextAlign.End,
+                                modifier = Modifier.combinedClickable(
+                                    interactionSource = remember { MutableInteractionSource() },
+                                    indication = null, onClick = {},
+                                    onLongClick = {
+                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                        clipboard.setText(AnnotatedString(result))
+                                        showCopied = true
+                                    }
+                                )
                             )
-                        )
+                        }
                     }
                 }
 
                 Spacer(Modifier.height(4.dp))
-            }
+                } // end inner Column
+            } // end display Box
 
             // Buttons
             Column(Modifier.weight(7.5f)) {
@@ -307,7 +347,11 @@ fun CalculatorScreen() {
                     Box(
                         Modifier.weight(1f).fillMaxHeight().padding(3.dp)
                             .clip(RoundedCornerShape(14.dp))
-                            .background(theme.accent)
+                            .background(
+                                Brush.verticalGradient(
+                                    listOf(theme.accent, theme.accent.copy(alpha = 0.75f))
+                                )
+                            )
                             .combinedClickable(
                                 interactionSource = remember { MutableInteractionSource() },
                                 indication = null,
@@ -315,7 +359,7 @@ fun CalculatorScreen() {
                             ),
                         contentAlignment = Alignment.Center
                     ) {
-                        Text("=", color = Color.White, fontSize = 34.sp, fontWeight = FontWeight.Light)
+                        Text("=", color = Color.White, fontSize = 34.sp, fontWeight = FontWeight.SemiBold)
                     }
                 }
             }
@@ -410,7 +454,8 @@ private fun BtnRow(
                 btn.label.length > 3 -> 15.sp
                 else                 -> 20.sp
             }
-            CalcBtn(btn.label, bg, fg, Modifier.weight(1f), fs) { onClick(btn.action) }
+            val isOp = btn.type == BtnType.Op || (is2nd && isSecond)
+            CalcBtn(btn.label, bg, fg, Modifier.weight(1f), fs, isOp, accent) { onClick(btn.action) }
         }
     }
 }
@@ -419,6 +464,7 @@ private fun BtnRow(
 private fun CalcBtn(
     label: String, bg: Color, fg: Color,
     modifier: Modifier, fontSize: TextUnit = 20.sp,
+    isAccent: Boolean = false, accent: Color = Color.Transparent,
     onClick: () -> Unit
 ) {
     val haptic = LocalHapticFeedback.current
@@ -429,13 +475,18 @@ private fun CalcBtn(
         animationSpec = spring(dampingRatio = 0.55f, stiffness = 750f),
         label = "btn_scale"
     )
+    val bgBrush = if (isAccent)
+        Brush.verticalGradient(listOf(bg, bg.copy(alpha = 0.78f)))
+    else
+        Brush.verticalGradient(listOf(bg, bg))
     Box(
         modifier
             .fillMaxHeight()
             .padding(3.dp)
             .scale(scale)
             .clip(RoundedCornerShape(13.dp))
-            .background(bg)
+            .background(bgBrush)
+            .then(if (isAccent) Modifier.border(1.dp, accent.copy(alpha = 0.35f), RoundedCornerShape(13.dp)) else Modifier)
             .combinedClickable(
                 interactionSource = source, indication = null,
                 onClick = { haptic.performHapticFeedback(HapticFeedbackType.LongPress); onClick() },
@@ -443,7 +494,8 @@ private fun CalcBtn(
             ),
         contentAlignment = Alignment.Center
     ) {
-        Text(label, color = fg, fontSize = fontSize, fontWeight = FontWeight.Light,
+        Text(label, color = fg, fontSize = fontSize,
+            fontWeight = if (isAccent) FontWeight.Medium else FontWeight.Light,
             textAlign = TextAlign.Center, maxLines = 1, overflow = TextOverflow.Ellipsis,
             modifier = Modifier.padding(horizontal = 2.dp))
     }
