@@ -340,7 +340,7 @@ fun CalculatorScreen() {
     )
 
     val btnRow: @Composable (Modifier, List<BtnDef>) -> Unit = { m, list ->
-        BtnRow(m, list, accent, onAccent, onClick = { onBtn(it) }, onLong = { onLong(it) })
+        BtnRow(m, list, accent, onAccent, landscape, onClick = { onBtn(it) }, onLong = { onLong(it) })
     }
     val numPad: @Composable (Modifier) -> Unit = { m ->
         Row(m) {
@@ -374,7 +374,7 @@ fun CalculatorScreen() {
             // Display (swipe sideways to delete)
             Box(
                 Modifier
-                    .weight(if (landscape) 1.5f else 2.6f)
+                    .weight(if (landscape) 2.3f else 2.6f)
                     .fillMaxWidth()
                     .background(Brush.verticalGradient(listOf(Color(0xFF0E0E10), BgColor)))
                     .pointerInput(Unit) {
@@ -459,7 +459,7 @@ fun CalculatorScreen() {
                             )
                         )
                     }
-                    if (fraction != null) {
+                    if (fraction != null && !landscape) {
                         Text("= $fraction", color = accent, fontSize = 18.sp, textAlign = TextAlign.End,
                             modifier = Modifier.fillMaxWidth())
                     }
@@ -574,7 +574,7 @@ private fun bigFont(len: Int, landscape: Boolean): TextUnit {
         len <= 20 -> 32
         else -> 26
     }
-    return (if (landscape) minOf(size, 40) else size).sp
+    return (if (landscape) minOf(size, 34) else size).sp
 }
 
 private fun highlight(expr: String, accent: Color, error: Boolean, dim: Boolean): AnnotatedString =
@@ -603,7 +603,7 @@ private fun InfoBadge(label: String, color: Color, onClick: () -> Unit) {
 
 @Composable
 private fun BtnRow(
-    modifier: Modifier, buttons: List<BtnDef>, accent: Color, onAccent: Color,
+    modifier: Modifier, buttons: List<BtnDef>, accent: Color, onAccent: Color, compact: Boolean,
     onClick: (String) -> Unit, onLong: (String) -> Unit
 ) {
     Row(modifier.fillMaxWidth()) {
@@ -631,7 +631,8 @@ private fun BtnRow(
                 else -> 22.sp
             }
             CalcBtn(
-                btn.label, bg, fg, Modifier.weight(1f), fs, accentStyle, accent, btn.altLabel,
+                btn.label, bg, fg, Modifier.weight(1f), fs, accentStyle, accent,
+                if (compact && btn.altLabel?.endsWith("⁻¹") == true) "⁻¹" else btn.altLabel,
                 onLongClick = btn.altAction?.let { alt -> { onLong(alt) } },
                 onClick = { onClick(btn.action) }
             )
@@ -672,7 +673,8 @@ private fun CalcBtn(
             label, color = fg, fontSize = fontSize,
             fontWeight = if (accentStyle) FontWeight.Medium else FontWeight.Light,
             textAlign = TextAlign.Center, maxLines = 1, overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.padding(horizontal = 2.dp)
+            // nudged down so the corner label never overlaps it
+            modifier = Modifier.padding(start = 2.dp, end = 2.dp, top = if (altLabel != null) 8.dp else 0.dp)
         )
         if (altLabel != null) {
             Text(
