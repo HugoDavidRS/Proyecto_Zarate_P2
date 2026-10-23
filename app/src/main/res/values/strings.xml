@@ -1,3 +1,6 @@
 <resources>
-    <string name="app_name">ProyectoParcial2</string>
+    <string name="app_name">Calculadora Científica</string>
+    <string name="widget_title">Calculadora</string>
+    <string name="widget_label">Último resultado</string>
+    <string name="widget_description">Muestra tu último cálculo. Tócalo para abrir la calculadora.</string>
 </resources>

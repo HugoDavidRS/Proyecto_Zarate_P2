@@ -6,27 +6,32 @@ enum class AngleMode { DEG, RAD, GRAD }
 
 object CalculatorEngine {
 
-    fun evaluate(expr: String, angleMode: AngleMode, x: Double? = null): Double {
+    internal fun normalize(expr: String) = expr
+        .replace("×", "*").replace("÷", "/").replace("−", "-")
+        .replace("π", "(pi)").replace("φ", "(phi)")
+        .replace("√", "sqrt").replace("∛", "cbrt")
+        .trim()
+
+    fun evaluate(
+        expr: String, angleMode: AngleMode, x: Double? = null, vars: Map<Char, Double> = emptyMap()
+    ): Double {
         if (expr.isBlank()) throw IllegalArgumentException("Empty")
-        val normalized = expr
-            .replace("×", "*").replace("÷", "/").replace("−", "-")
-            .replace("π", "(pi)").replace("φ", "(phi)")
-            .replace("√", "sqrt").replace("∛", "cbrt")
-            .trim()
-        val parser = Parser(normalized, angleMode, x)
+        val parser = Parser(normalize(expr), angleMode, x, vars)
         val result = parser.parseExpr()
         if (!parser.atEnd()) throw IllegalArgumentException("Sintaxis")
         if (result.isNaN()) throw ArithmeticException("NaN")
         return result
     }
 
-    fun formatResult(v: Double): String {
+    /** [decimals] >= 0 fixes the number of decimals for non-integers (FIX mode); -1 = automatic. */
+    fun formatResult(v: Double, decimals: Int = -1): String {
         if (v.isNaN()) return "Undefined"
         if (v.isInfinite()) return if (v > 0) "∞" else "-∞"
         if (v == 0.0 || v == -0.0) return "0"
         val abs = abs(v)
         return when {
             v == floor(v) && abs < 1e15 -> v.toLong().toString()
+            decimals >= 0 && abs >= 1e-6 && abs < 1e12 -> "%.${decimals}f".format(java.util.Locale.US, v)
             abs >= 1e-6 && abs < 1e12 -> {
                 val s = "%.10g".format(java.util.Locale.US, v)
                 if ('e' in s || 'E' in s) s
@@ -60,6 +65,20 @@ object CalculatorEngine {
         }
         return null
     }
+
+    /** Multiples of π such as "π/2", "3π/4" or "-2π", or null. */
+    fun toPiForm(v: Double): String? {
+        if (!v.isFinite() || abs(v) < 1e-9 || abs(v) > 1e6) return null
+        val r = v / PI
+        val n = Math.round(r)
+        if (abs(r - n) < 1e-10 * max(1.0, abs(r))) {
+            return when (n) { 0L -> null; 1L -> "π"; -1L -> "-π"; else -> "${n}π" }
+        }
+        val f = toFraction(r, 12) ?: return null
+        val neg = f.startsWith("-")
+        val (a, b) = f.removePrefix("-").split("/")
+        return (if (neg) "-" else "") + (if (a == "1") "π" else "${a}π") + "/$b"
+    }
 }
 
 private val NAMES = setOf(
@@ -70,7 +89,10 @@ private val NAMES = setOf(
     "ncr", "npr", "gcd", "lcm", "max", "min", "pow", "hypot", "logb"
 )
 
-private class Parser(private val s: String, private val mode: AngleMode, private val xVal: Double?) {
+private class Parser(
+    private val s: String, private val mode: AngleMode, private val xVal: Double?,
+    private val vars: Map<Char, Double>
+) {
     var i = 0
 
     fun atEnd(): Boolean { skipSpaces(); return i >= s.length }
@@ -161,6 +183,11 @@ private class Parser(private val s: String, private val mode: AngleMode, private
     }
 
     private fun parseWord(): Double {
+        // Memory variables are single uppercase letters A–F
+        if (s[i] in 'A'..'F') {
+            val c = s[i++]
+            return vars[c] ?: throw IllegalArgumentException("Variable $c vacía")
+        }
         val start = i
         while (i < s.length && (s[i].isLetterOrDigit() || s[i] == '_')) i++
         var word = s.substring(start, i).lowercase()

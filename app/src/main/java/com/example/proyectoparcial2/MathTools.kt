@@ -173,7 +173,7 @@ fun findRoots(f: (Double) -> Double, from: Double, to: Double, samples: Int = 40
 
 /** Roots of ax²+bx+c=0 as (label, value) pairs; complex roots as "re + im i". */
 fun solveQuadratic(a: Double, b: Double, c: Double): List<Pair<String, String>> {
-    val fmt = CalculatorEngine::formatResult
+    val fmt = { v: Double -> CalculatorEngine.formatResult(v) }
     if (a == 0.0) {
         if (b == 0.0) return listOf("Resultado" to if (c == 0.0) "Infinitas soluciones" else "Sin solución")
         return listOf("x" to fmt(-c / b))
@@ -196,3 +196,179 @@ fun solveLinear2(a1: Double, b1: Double, c1: Double, a2: Double, b2: Double, c2:
     if (abs(det) < 1e-12) return null
     return (c1 * b2 - c2 * b1) / det to (a1 * c2 - a2 * c1) / det
 }
+
+// ── Calculus ──────────────────────────────────────────────────────────────────
+
+fun derivative(f: (Double) -> Double, x: Double): Double {
+    val h = 1e-5 * kotlin.math.max(1.0, abs(x))
+    return (f(x + h) - f(x - h)) / (2 * h)
+}
+
+/** Simpson's rule; NaN if f is undefined somewhere in [a, b]. */
+fun integrate(f: (Double) -> Double, a: Double, b: Double, n: Int = 1000): Double {
+    if (a == b) return 0.0
+    val h = (b - a) / n
+    var s = f(a) + f(b)
+    for (k in 1 until n) s += f(a + k * h) * (if (k % 2 == 1) 4 else 2)
+    return s * h / 3
+}
+
+// ── Matrices ──────────────────────────────────────────────────────────────────
+
+typealias Matrix = List<List<Double>>
+
+fun matAdd(a: Matrix, b: Matrix): Matrix = a.indices.map { i -> a[i].indices.map { j -> a[i][j] + b[i][j] } }
+fun matSub(a: Matrix, b: Matrix): Matrix = a.indices.map { i -> a[i].indices.map { j -> a[i][j] - b[i][j] } }
+fun matMul(a: Matrix, b: Matrix): Matrix =
+    a.indices.map { i -> b[0].indices.map { j -> a[i].indices.sumOf { k -> a[i][k] * b[k][j] } } }
+fun matTranspose(a: Matrix): Matrix = a[0].indices.map { j -> a.indices.map { i -> a[i][j] } }
+
+fun matDet(a: Matrix): Double {
+    val m = a.map { it.toDoubleArray() }.toMutableList()
+    val n = m.size
+    var det = 1.0
+    for (c in 0 until n) {
+        val p = (c until n).maxBy { abs(m[it][c]) }
+        if (abs(m[p][c]) < 1e-12) return 0.0
+        if (p != c) { val t = m[p]; m[p] = m[c]; m[c] = t; det = -det }
+        det *= m[c][c]
+        for (r in c + 1 until n) {
+            val f = m[r][c] / m[c][c]
+            for (k in c until n) m[r][k] -= f * m[c][k]
+        }
+    }
+    return det
+}
+
+/** Gauss–Jordan inverse, or null when the matrix is singular. */
+fun matInverse(a: Matrix): Matrix? {
+    val n = a.size
+    val m = MutableList(n) { r -> DoubleArray(2 * n) { c -> if (c < n) a[r][c] else if (c - n == r) 1.0 else 0.0 } }
+    for (c in 0 until n) {
+        val p = (c until n).maxBy { abs(m[it][c]) }
+        if (abs(m[p][c]) < 1e-12) return null
+        val t = m[p]; m[p] = m[c]; m[c] = t
+        val pv = m[c][c]
+        for (k in 0 until 2 * n) m[c][k] /= pv
+        for (r in 0 until n) if (r != c) {
+            val f = m[r][c]
+            for (k in 0 until 2 * n) m[r][k] -= f * m[c][k]
+        }
+    }
+    return m.map { row -> (n until 2 * n).map { row[it] + 0.0 } }
+}
+
+// ── Linear regression ─────────────────────────────────────────────────────────
+
+data class Regression(val n: Int, val slope: Double, val intercept: Double, val r: Double)
+
+fun parsePairs(s: String): List<Pair<Double, Double>> =
+    s.split(Regex("[;\n]+")).mapNotNull { part -> parseNumberList(part).takeIf { it.size == 2 }?.let { it[0] to it[1] } }
+
+fun linearRegression(pts: List<Pair<Double, Double>>): Regression? {
+    if (pts.size < 2) return null
+    val n = pts.size
+    val mx = pts.sumOf { it.first } / n
+    val my = pts.sumOf { it.second } / n
+    val sxx = pts.sumOf { (it.first - mx).pow(2) }
+    val syy = pts.sumOf { (it.second - my).pow(2) }
+    val sxy = pts.sumOf { (it.first - mx) * (it.second - my) }
+    if (sxx == 0.0) return null
+    val slope = sxy / sxx
+    return Regression(n, slope, my - slope * mx, if (syy == 0.0) Double.NaN else sxy / sqrt(sxx * syy))
+}
+
+// ── Finance ───────────────────────────────────────────────────────────────────
+
+fun compoundAmount(principal: Double, ratePct: Double, years: Double, perYear: Double) =
+    principal * (1 + ratePct / 100 / perYear).pow(perYear * years)
+
+fun loanPayment(principal: Double, ratePct: Double, months: Int): Double {
+    val i = ratePct / 100 / 12
+    return if (i == 0.0) principal / months else principal * i / (1 - (1 + i).pow(-months))
+}
+
+// ── Dates (proleptic Gregorian, days since 1970-01-01) ───────────────────────
+
+fun daysFromCivil(y0: Int, m: Int, d: Int): Long {
+    val y = (if (m <= 2) y0 - 1 else y0).toLong()
+    val era = (if (y >= 0) y else y - 399) / 400
+    val yoe = y - era * 400
+    val doy = (153 * (if (m > 2) m - 3 else m + 9) + 2) / 5 + d - 1
+    val doe = yoe * 365 + yoe / 4 - yoe / 100 + doy
+    return era * 146097 + doe - 719468
+}
+
+fun civilFromDays(z0: Long): Triple<Int, Int, Int> {
+    val z = z0 + 719468
+    val era = (if (z >= 0) z else z - 146096) / 146097
+    val doe = z - era * 146097
+    val yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365
+    val doy = doe - (365 * yoe + yoe / 4 - yoe / 100)
+    val mp = (5 * doy + 2) / 153
+    val d = (doy - (153 * mp + 2) / 5 + 1).toInt()
+    val m = (if (mp < 10) mp + 3 else mp - 9).toInt()
+    val y = (yoe + era * 400).toInt()
+    return Triple(if (m <= 2) y + 1 else y, m, d)
+}
+
+/** 0 = Monday … 6 = Sunday. */
+fun dayOfWeek(day: Long) = Math.floorMod(day + 3, 7L).toInt()
+
+fun daysInMonth(y: Int, m: Int) =
+    (daysFromCivil(if (m == 12) y + 1 else y, if (m == 12) 1 else m + 1, 1) - daysFromCivil(y, m, 1)).toInt()
+
+/** Calendar difference (years, months, days) between two days, from <= to. */
+fun calendarDiff(from: Long, to: Long): Triple<Int, Int, Int> {
+    val (y1, m1, d1) = civilFromDays(from)
+    val (y2, m2, d2) = civilFromDays(to)
+    var y = y2 - y1; var m = m2 - m1; var d = d2 - d1
+    if (d < 0) {
+        m -= 1
+        d += daysInMonth(if (m2 == 1) y2 - 1 else y2, if (m2 == 1) 12 else m2 - 1)
+    }
+    if (m < 0) { y -= 1; m += 12 }
+    return Triple(y, m, d)
+}
+
+/** Monday–Friday days in [from, to). */
+fun businessDays(from: Long, to: Long): Long {
+    val total = to - from
+    var count = total / 7 * 5
+    for (k in 0 until total % 7) if (dayOfWeek(from + total / 7 * 7 + k) < 5) count++
+    return count
+}
+
+// ── Number theory ─────────────────────────────────────────────────────────────
+
+fun primeFactors(n0: Long): List<Pair<Long, Int>> {
+    val out = mutableListOf<Pair<Long, Int>>()
+    var n = n0
+    var p = 2L
+    while (p * p <= n) {
+        var e = 0
+        while (n % p == 0L) { n /= p; e++ }
+        if (e > 0) out += p to e
+        p += if (p == 2L) 1 else 2
+    }
+    if (n > 1) out += n to 1
+    return out
+}
+
+fun isPrime(n: Long): Boolean {
+    if (n < 2) return false
+    if (n % 2 == 0L) return n == 2L
+    var p = 3L
+    while (p * p <= n) { if (n % p == 0L) return false; p += 2 }
+    return true
+}
+
+fun divisors(factors: List<Pair<Long, Int>>): List<Long> {
+    var ds = listOf(1L)
+    for ((p, e) in factors) {
+        ds = ds.flatMap { d -> var pk = 1L; (0..e).map { val v = d * pk; pk *= p; v } }
+    }
+    return ds.sorted()
+}
+
+fun gcdL(a: Long, b: Long): Long { var x = abs(a); var y = abs(b); while (y != 0L) { val t = y; y = x % y; x = t }; return x }

@@ -50,10 +50,15 @@ import kotlin.math.pow
 internal enum class Tool(val chip: String, val title: String) {
     CONST("π  Constantes", "Constantes"),
     UNITS("⇄  Unidades", "Conversor de unidades"),
-    STATS("σ  Estadística", "Estadística"),
-    BASES("#  Bases", "Conversor de bases"),
     GRAPH("∿  Gráfica", "Graficadora"),
     EQ("x²  Ecuaciones", "Ecuaciones"),
+    MATRIX("▦  Matrices", "Matrices"),
+    STATS("σ  Estadística", "Estadística"),
+    FINANCE("$  Finanzas", "Calculadora financiera"),
+    DATES("◷  Fechas", "Calculadora de fechas"),
+    NUMBERS("ℙ  Primos", "Números y primos"),
+    BASES("#  Bases", "Conversor de bases"),
+    VARS("A  Variables", "Variables A–F"),
     SETTINGS("⚙  Ajustes", "Ajustes")
 }
 
@@ -135,13 +140,13 @@ internal fun ValueRow(label: String, value: String, accent: Color, onClick: (() 
 }
 
 @Composable
-private fun SectionTitle(text: String, accent: Color) {
+internal fun SectionTitle(text: String, accent: Color) {
     Text(text, color = accent, fontSize = 15.sp, fontWeight = FontWeight.SemiBold,
         modifier = Modifier.padding(top = 10.dp, bottom = 2.dp))
 }
 
 @Composable
-private fun Hint(text: String) {
+internal fun Hint(text: String) {
     Text(text, color = TextSecondary, fontSize = 12.sp, modifier = Modifier.padding(vertical = 4.dp))
 }
 
@@ -207,49 +212,6 @@ internal fun ColumnScope.UnitsPanel(accent: Color, initial: Double?, onInsert: (
     }
 }
 
-// ── Statistics ────────────────────────────────────────────────────────────────
-
-@Composable
-internal fun ColumnScope.StatsPanel(accent: Color, onInsert: (String) -> Unit) {
-    var data by rememberSaveable { mutableStateOf("") }
-    val st = computeStats(parseNumberList(data))
-
-    CalcField(data, { data = it }, "Datos (separados por comas o espacios)", accent, singleLine = false)
-    PillRow {
-        Pill("Ejemplo", false, accent) { data = "4, 8, 15, 16, 23, 42" }
-        Pill("Limpiar", false, accent) { data = "" }
-    }
-    LazyColumn(
-        Modifier.fillMaxWidth().weight(1f),
-        verticalArrangement = Arrangement.spacedBy(8.dp), contentPadding = PaddingValues(vertical = 8.dp)
-    ) {
-        if (st == null) item { Hint("Escribe números para calcular sus estadísticas. Toca un resultado para insertarlo.") }
-        else {
-            val rows = listOf(
-                "Cantidad (n)" to st.n.toDouble(),
-                "Suma Σx" to st.sum,
-                "Suma de cuadrados Σx²" to st.sumSq,
-                "Media x̄" to st.mean,
-                "Mediana" to st.median,
-                "Mínimo" to st.min,
-                "Máximo" to st.max,
-                "Rango" to st.max - st.min,
-                "Varianza σ² (población)" to st.varPop,
-                "Varianza s² (muestra)" to st.varSample,
-                "Desv. estándar σ (población)" to st.sdPop,
-                "Desv. estándar s (muestra)" to st.sdSample
-            )
-            items(rows) { (label, value) ->
-                ValueRow(label, if (value.isFinite()) fmt(value) else "—", accent,
-                    onClick = { onInsert(fmt(value)) }.takeIf { value.isFinite() })
-            }
-            item {
-                ValueRow("Moda", if (st.modes.isEmpty()) "Sin moda" else st.modes.joinToString(", ") { fmt(it) }, accent)
-            }
-        }
-    }
-}
-
 // ── Number bases ──────────────────────────────────────────────────────────────
 
 private val RADIXES = listOf(Triple("DEC", 10, "Decimal"), Triple("HEX", 16, "Hexadecimal"),
@@ -301,152 +263,6 @@ internal fun ColumnScope.BasesPanel(accent: Color, initial: Long?, onInsert: (St
             ValueRow("Bits necesarios", "$bits", accent)
             Pill("Insertar decimal en la calculadora", false, accent) { onInsert(value.toString()) }
         }
-    }
-}
-
-// ── Graph ─────────────────────────────────────────────────────────────────────
-
-private val GridColor = Color(0xFF26262A)
-private val AxisColor = Color(0xFF636366)
-
-private fun niceStep(raw: Double): Double {
-    val p = 10.0.pow(floor(log10(raw)))
-    val m = raw / p
-    return p * when { m < 1.5 -> 1.0; m < 3.5 -> 2.0; m < 7.5 -> 5.0; else -> 10.0 }
-}
-
-@Composable
-internal fun ColumnScope.GraphPanel(accent: Color, onInsert: (String) -> Unit) {
-    var fx by rememberSaveable { mutableStateOf("sin(x)") }
-    var cx by remember { mutableDoubleStateOf(0.0) }
-    var cy by remember { mutableDoubleStateOf(0.0) }
-    var spanX by remember { mutableDoubleStateOf(20.0) }
-    var traceX by remember { mutableStateOf<Double?>(null) }
-
-    val expr = fx.trim().removePrefix("y=").removePrefix("f(x)=").trim()
-    val invalid = remember(expr) {
-        expr.isBlank() || runCatching { CalculatorEngine.evaluate(expr, AngleMode.RAD, 0.731) }
-            .exceptionOrNull() is IllegalArgumentException
-    }
-    val f: (Double) -> Double = remember(expr) {
-        { x -> try { CalculatorEngine.evaluate(expr, AngleMode.RAD, x) } catch (_: Exception) { Double.NaN } }
-    }
-    val roots = remember(expr, invalid, cx, spanX) {
-        if (invalid) emptyList()
-        else findRoots(f, cx - spanX / 2, cx + spanX / 2).map { if (abs(it) < 1e-9) 0.0 else it }
-    }
-    val textMeasurer = rememberTextMeasurer()
-    val labelStyle = TextStyle(color = TextSecondary, fontSize = 10.sp)
-
-    CalcField(fx, { fx = it; traceX = null }, "f(x) =", accent, keyboardType = KeyboardType.Ascii)
-    PillRow {
-        listOf("sin(x)", "cos(x)", "tan(x)", "x^2", "x^3−3x", "1/x", "e^x", "ln(x)", "√(x)", "sin(x)/x")
-            .forEach { p -> Pill(p, p == fx, accent) { fx = p; traceX = null } }
-    }
-    Box(
-        Modifier.fillMaxWidth().weight(1f).padding(top = 4.dp)
-            .clip(RoundedCornerShape(16.dp)).background(Color(0xFF111113))
-    ) {
-        Canvas(
-            Modifier.fillMaxSize()
-                .pointerInput(Unit) {
-                    detectTransformGestures { _, pan, zoom, _ ->
-                        val upp = spanX / size.width
-                        cx -= pan.x * upp
-                        cy += pan.y * upp
-                        spanX = (spanX / zoom).coerceIn(1e-3, 1e5)
-                    }
-                }
-                .pointerInput(Unit) {
-                    detectTapGestures { o -> traceX = cx + (o.x - size.width / 2.0) * spanX / size.width }
-                }
-        ) {
-            val w = size.width
-            val h = size.height
-            if (w <= 0f || h <= 0f) return@Canvas
-            val upp = spanX / w
-            fun sx(x: Double) = ((x - cx) / upp + w / 2).toFloat()
-            fun sy(y: Double) = (h / 2 - (y - cy) / upp).toFloat()
-
-            // Grid + tick labels (drawText needs non-negative room to the right/bottom)
-            val step = niceStep(spanX / 8)
-            val labelRow = sy(0.0).coerceIn(0f, h - 30f)
-            val labelCol = sx(0.0).coerceIn(0f, w - 60f)
-            var g = floor((cx - spanX / 2) / step) * step
-            while (g <= cx + spanX / 2) {
-                val p = sx(g)
-                drawLine(GridColor, Offset(p, 0f), Offset(p, h), 1f)
-                if (abs(g) > step / 2 && p >= 0f && p < w - 60f)
-                    drawText(textMeasurer, fmt(g), Offset(p + 3f, labelRow + 2f), labelStyle)
-                g += step
-            }
-            val halfY = upp * h / 2
-            g = floor((cy - halfY) / step) * step
-            while (g <= cy + halfY) {
-                val p = sy(g)
-                drawLine(GridColor, Offset(0f, p), Offset(w, p), 1f)
-                if (abs(g) > step / 2 && p >= 0f && p < h - 30f)
-                    drawText(textMeasurer, fmt(g), Offset(labelCol + 3f, p + 2f), labelStyle)
-                g += step
-            }
-            drawLine(AxisColor, Offset(0f, sy(0.0)), Offset(w, sy(0.0)), 2f)
-            drawLine(AxisColor, Offset(sx(0.0), 0f), Offset(sx(0.0), h), 2f)
-            if (invalid) return@Canvas
-
-            // Curve: lift the pen on undefined points and on asymptote jumps
-            val path = Path()
-            var penUp = true
-            var lastY = 0f
-            var px = 0f
-            while (px <= w) {
-                val y = f(cx + (px - w / 2) * upp)
-                if (!y.isFinite()) penUp = true
-                else {
-                    val py = sy(y).coerceIn(-h * 3, h * 4)
-                    if (penUp || abs(py - lastY) > h * 2) path.moveTo(px, py) else path.lineTo(px, py)
-                    penUp = false
-                    lastY = py
-                }
-                px += 2f
-            }
-            drawPath(path, accent, style = Stroke(width = 3.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round))
-
-            roots.forEach { r ->
-                val p = Offset(sx(r), sy(0.0))
-                drawCircle(Color.White, 6.dp.toPx(), p)
-                drawCircle(accent, 4.dp.toPx(), p)
-            }
-            traceX?.let { tx ->
-                val tpx = sx(tx)
-                drawLine(accent.copy(alpha = 0.5f), Offset(tpx, 0f), Offset(tpx, h), 1.5f,
-                    pathEffect = PathEffect.dashPathEffect(floatArrayOf(10f, 8f)))
-                val ty = f(tx)
-                if (ty.isFinite()) {
-                    drawCircle(Color.White, 7.dp.toPx(), Offset(tpx, sy(ty)))
-                    drawCircle(accent, 5.dp.toPx(), Offset(tpx, sy(ty)))
-                }
-            }
-        }
-        if (invalid) Text("Escribe una función de x válida", color = ErrorColor,
-            modifier = Modifier.align(Alignment.Center))
-    }
-    Row(Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        Pill("−  Alejar", false, accent) { spanX = (spanX * 1.5).coerceAtMost(1e5) }
-        Pill("+  Acercar", false, accent) { spanX = (spanX / 1.5).coerceAtLeast(1e-3) }
-        Pill("⌂  Centrar", false, accent) { cx = 0.0; cy = 0.0; spanX = 20.0; traceX = null }
-    }
-    val tx = traceX
-    Text(
-        if (tx != null && !invalid) {
-            val ty = f(tx)
-            "Punto: x = ${fmt(tx)},  f(x) = ${if (ty.isFinite()) fmt(ty) else "indefinido"}"
-        } else "Arrastra para mover · pellizca para zoom · toca para ver un punto",
-        color = if (tx != null) TextPrimary else TextSecondary, fontSize = 13.sp,
-        modifier = Modifier.padding(top = 6.dp)
-    )
-    if (roots.isNotEmpty()) {
-        Hint("Raíces visibles (toca para insertar):")
-        PillRow { roots.take(10).forEach { r -> Pill("x = ${fmt(r)}", false, accent) { onInsert(fmt(r)) } } }
     }
 }
 
@@ -520,86 +336,3 @@ internal fun ColumnScope.EquationsPanel(accent: Color, onInsert: (String) -> Uni
     }
 }
 
-// ── Settings ──────────────────────────────────────────────────────────────────
-
-@Composable
-private fun SettingSwitch(title: String, subtitle: String, checked: Boolean, onChange: (Boolean) -> Unit, accent: Color) {
-    Row(
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(FuncColor)
-            .clickable { onChange(!checked) }.padding(horizontal = 14.dp, vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Column(Modifier.weight(1f)) {
-            Text(title, color = TextPrimary, fontSize = 16.sp)
-            Text(subtitle, color = TextSecondary, fontSize = 12.sp)
-        }
-        Switch(
-            checked, onChange,
-            colors = SwitchDefaults.colors(
-                checkedThumbColor = Color.White, checkedTrackColor = accent,
-                uncheckedThumbColor = TextSecondary, uncheckedTrackColor = NumColor, uncheckedBorderColor = ClearColor
-            )
-        )
-    }
-}
-
-@Composable
-internal fun ColumnScope.SettingsPanel(
-    themeIndex: Int, onTheme: (Int) -> Unit,
-    soundOn: Boolean, onSound: (Boolean) -> Unit,
-    hapticOn: Boolean, onHaptic: (Boolean) -> Unit,
-    fractionOn: Boolean, onFraction: (Boolean) -> Unit,
-    historyCount: Int, onClearHistory: () -> Unit
-) {
-    val accent = THEMES[themeIndex].accent
-    Column(
-        Modifier.fillMaxWidth().weight(1f).verticalScroll(rememberScrollState()),
-        verticalArrangement = Arrangement.spacedBy(10.dp)
-    ) {
-        SectionTitle("Tema de color", accent)
-        THEMES.chunked(4).forEachIndexed { r, chunk ->
-            Row(Modifier.fillMaxWidth()) {
-                chunk.forEachIndexed { c, t ->
-                    val idx = r * 4 + c
-                    val selected = idx == themeIndex
-                    Column(
-                        Modifier.weight(1f).clip(RoundedCornerShape(12.dp)).clickable { onTheme(idx) }
-                            .padding(vertical = 8.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally
-                    ) {
-                        Box(
-                            Modifier.size(46.dp).clip(CircleShape).background(t.accent)
-                                .then(if (selected) Modifier.border(3.dp, Color.White, CircleShape) else Modifier),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            if (selected) Text("✓", color = onAccentOf(t.accent), fontSize = 20.sp, fontWeight = FontWeight.Bold)
-                        }
-                        Text(t.name, color = if (selected) TextPrimary else TextSecondary, fontSize = 12.sp,
-                            modifier = Modifier.padding(top = 4.dp))
-                    }
-                }
-            }
-        }
-        SectionTitle("Preferencias", accent)
-        SettingSwitch("Sonido al tocar", "Clic suave en cada tecla", soundOn, onSound, accent)
-        SettingSwitch("Vibración", "Respuesta háptica al presionar", hapticOn, onHaptic, accent)
-        SettingSwitch("Mostrar fracciones", "Ej: 0.75 se muestra también como 3/4", fractionOn, onFraction, accent)
-        SectionTitle("Historial", accent)
-        ValueRow("Cálculos guardados", "$historyCount", accent)
-        Text(
-            "Borrar historial", color = ErrorColor, fontSize = 16.sp, textAlign = TextAlign.Center,
-            modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(FuncColor)
-                .clickable(onClick = onClearHistory).padding(14.dp)
-        )
-        SectionTitle("Trucos", accent)
-        listOf(
-            "Mantén presionado un botón para usar la función pequeña de su esquina.",
-            "Desliza el dedo sobre la pantalla de números para borrar.",
-            "Mantén presionado el resultado para copiarlo.",
-            "Toca DEG / RAD / GRAD arriba a la izquierda para cambiar el modo de ángulo.",
-            "Toca un cálculo del historial para reutilizar su resultado.",
-            "Gira el teléfono para ver más funciones científicas."
-        ).forEach { Text("•  $it", color = TextSecondary, fontSize = 14.sp) }
-        Spacer(Modifier.height(16.dp))
-    }
-}

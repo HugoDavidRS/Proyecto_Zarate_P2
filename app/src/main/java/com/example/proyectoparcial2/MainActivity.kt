@@ -9,6 +9,7 @@ import com.example.proyectoparcial2.ui.theme.ProyectoParcial2Theme
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        Palette.light = getSharedPreferences("calc_prefs", MODE_PRIVATE).getBoolean("light", false)
         enableEdgeToEdge()
         setContent {
             ProyectoParcial2Theme(darkTheme = true, dynamicColor = false) {

@@ -1,6 +1,8 @@
 package com.example.proyectoparcial2
 
+import android.app.Activity
 import android.content.Context
+import android.content.Intent
 import android.content.SharedPreferences
 import android.content.res.Configuration
 import android.media.AudioManager
@@ -8,8 +10,11 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.keyframes
+import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
@@ -25,6 +30,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
@@ -40,7 +46,10 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.draw.scale
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
@@ -51,8 +60,15 @@ import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -62,20 +78,30 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.view.WindowCompat
 import kotlinx.coroutines.delay
 import kotlin.math.abs
 import kotlin.math.floor
 
-// ── Palette ───────────────────────────────────────────────────────────────────
-internal val BgColor       = Color(0xFF1C1C1E)
-internal val NumColor      = Color(0xFF3A3A3C)
-internal val FuncColor     = Color(0xFF2C2C2E)
-internal val ClearColor    = Color(0xFF636366)
-internal val MemColor      = Color(0xFF252527)
-internal val TextPrimary   = Color(0xFFFFFFFF)
-internal val TextSecondary = Color(0xFF8E8E93)
-internal val ErrorColor    = Color(0xFFFF453A)
-private val SuccessColor   = Color(0xFF30D158)
+// ── Palette (switches live between dark and light mode) ───────────────────────
+internal object Palette { var light by mutableStateOf(false) }
+
+private fun pick(dark: Long, light: Long) = Color(if (Palette.light) light else dark)
+internal val BgColor get()       = pick(0xFF1C1C1E, 0xFFF2F2F7)
+internal val NumColor get()      = pick(0xFF3A3A3C, 0xFFFFFFFF)
+internal val FuncColor get()     = pick(0xFF2C2C2E, 0xFFE5E5EA)
+internal val ClearColor get()    = pick(0xFF636366, 0xFFC7C7CC)
+internal val MemColor get()      = pick(0xFF252527, 0xFFEBEBF0)
+internal val TextPrimary get()   = pick(0xFFFFFFFF, 0xFF1C1C1E)
+internal val TextSecondary get() = pick(0xFF8E8E93, 0xFF6C6C70)
+internal val GraphBg get()       = pick(0xFF111113, 0xFFFFFFFF)
+private val DisplayTop get()     = pick(0xFF0E0E10, 0xFFFFFFFF)
+private val PanelColor get()     = pick(0xFF242426, 0xFFFFFFFF)
+private val ToastBg get()        = pick(0xEE2C2C2E, 0xF0FFFFFF)
+private val DividerColor get()   = pick(0xFF3A3A3C, 0xFFD1D1D6)
+private val DimNumColor get()    = pick(0xFFAEAEB2, 0xFF6C6C70)
+internal val ErrorColor = Color(0xFFFF453A)
+private val SuccessColor = Color(0xFF30D158)
 
 internal class CalcTheme(val name: String, val accent: Color)
 internal val THEMES = listOf(
@@ -111,10 +137,21 @@ private data class BtnDef(
 
 private fun num(d: String) = BtnDef(d, type = BtnType.Num)
 
+/** What TalkBack reads for symbol buttons. */
+private val SPOKEN = mapOf(
+    "⌫" to "Borrar", "AC" to "Borrar todo", "÷" to "Dividir", "×" to "Multiplicar", "−" to "Restar",
+    "+" to "Sumar", "=" to "Igual", "±" to "Cambiar signo", "x²" to "Al cuadrado", "x³" to "Al cubo",
+    "xⁿ" to "Potencia", "√" to "Raíz cuadrada", "∛" to "Raíz cúbica", "π" to "Pi", "!" to "Factorial",
+    "%" to "Porcentaje", "1/x" to "Recíproco", "," to "Coma", "." to "Punto decimal",
+    "2nd" to "Segunda función", "(" to "Abrir paréntesis", ")" to "Cerrar paréntesis",
+    "MC" to "Borrar memoria", "MR" to "Recuperar memoria", "M+" to "Sumar a memoria", "M-" to "Restar de memoria"
+)
+
 // ── Screen ────────────────────────────────────────────────────────────────────
 @Composable
 fun CalculatorScreen() {
     val context = LocalContext.current
+    val view = LocalView.current
     val haptic = LocalHapticFeedback.current
     val clipboard = LocalClipboardManager.current
     val prefs = remember { context.getSharedPreferences("calc_prefs", Context.MODE_PRIVATE) }
@@ -126,18 +163,33 @@ fun CalculatorScreen() {
     var soundOn by remember { mutableStateOf(prefs.getBoolean("sound", true)) }
     var hapticOn by remember { mutableStateOf(prefs.getBoolean("haptic", true)) }
     var fractionOn by remember { mutableStateOf(prefs.getBoolean("fraction", true)) }
+    var decimals by remember { mutableIntStateOf(prefs.getInt("decimals", -1)) }
     var angleMode by remember { mutableStateOf(AngleMode.entries.getOrElse(prefs.getInt("angle", 0)) { AngleMode.DEG }) }
     var history by remember { mutableStateOf(loadHistory(prefs)) }
-    LaunchedEffect(themeIndex, soundOn, hapticOn, fractionOn, angleMode, history) {
+    var vars by remember { mutableStateOf(loadVars(prefs)) }
+    var showTutorial by remember { mutableStateOf(!prefs.getBoolean("tutorial_done", false)) }
+    val lightMode = Palette.light
+    LaunchedEffect(themeIndex, soundOn, hapticOn, fractionOn, decimals, angleMode, history, vars, lightMode) {
         prefs.edit()
             .putInt("theme", themeIndex).putBoolean("sound", soundOn).putBoolean("haptic", hapticOn)
-            .putBoolean("fraction", fractionOn).putInt("angle", angleMode.ordinal)
+            .putBoolean("fraction", fractionOn).putInt("decimals", decimals).putInt("angle", angleMode.ordinal)
+            .putBoolean("light", lightMode)
             .putString("history", history.joinToString("\n") { "${it.first}\t${it.second}" })
+            .putString("vars", vars.entries.joinToString(";") { "${it.key}=${it.value}" })
             .apply()
+        CalcWidget.refresh(context)
+    }
+    LaunchedEffect(lightMode) {
+        val window = (view.context as? Activity)?.window ?: return@LaunchedEffect
+        WindowCompat.getInsetsController(window, view).run {
+            isAppearanceLightStatusBars = lightMode
+            isAppearanceLightNavigationBars = lightMode
+        }
     }
 
     // Survives screen rotation
     var expression by rememberSaveable { mutableStateOf("") }
+    var cursor by rememberSaveable { mutableStateOf(0) }
     var justEvaluated by rememberSaveable { mutableStateOf(false) }
     var memory by rememberSaveable { mutableStateOf(0.0) }
     var hasMemory by rememberSaveable { mutableStateOf(false) }
@@ -169,13 +221,13 @@ fun CalculatorScreen() {
         if (toastTick > 0) { toastVisible = true; delay(1300); toastVisible = false }
     }
 
-    // Live preview while typing
-    LaunchedEffect(expression, angleMode) {
+    // Live preview while typing (real numbers first, then complex)
+    LaunchedEffect(expression, angleMode, decimals, vars) {
         isError = false
-        val v = if (expression.isBlank()) null
-        else runCatching { CalculatorEngine.evaluate(withAns(expression, lastAnswer), angleMode) }.getOrNull()
-        resultValue = v
-        result = v?.let(CalculatorEngine::formatResult) ?: ""
+        val ev = if (expression.isBlank()) null
+        else runCatching { evaluateAny(withAns(expression, lastAnswer), angleMode, vars, decimals) }.getOrNull()
+        resultValue = ev?.value
+        result = ev?.text ?: ""
     }
 
     // ── Actions ───────────────────────────────────────────────────────────────
@@ -188,43 +240,65 @@ fun CalculatorScreen() {
         showToast("✓ Copiado")
     }
 
+    fun shareHistory() {
+        if (history.isEmpty()) { showToast("El historial está vacío", TextSecondary); return }
+        val text = history.reversed().joinToString("\n") { "${it.first} = ${it.second}" }
+        val send = Intent(Intent.ACTION_SEND).apply {
+            type = "text/plain"
+            putExtra(Intent.EXTRA_TEXT, "Mis cálculos:\n\n$text")
+        }
+        context.startActivity(Intent.createChooser(send, "Compartir historial"))
+    }
+
     fun feedback(type: HapticFeedbackType, sound: Int) {
         if (hapticOn) haptic.performHapticFeedback(type)
         if (soundOn) audio.playSoundEffect(sound, -1f)
     }
 
+    fun setExpr(s: String, c: Int = s.length) {
+        expression = s
+        cursor = c.coerceIn(0, s.length)
+    }
+
     fun insert(s: String) {
         // After "=", operators continue from the result; anything else starts a new calculation
         val continues = s[0] in "+−-×÷^%!, "
-        expression = if (justEvaluated && !continues) s else expression + s
+        if (justEvaluated && !continues) setExpr(s)
+        else {
+            val c = cursor.coerceIn(0, expression.length)
+            setExpr(expression.substring(0, c) + s + expression.substring(c), c + s.length)
+        }
         justEvaluated = false
     }
 
     fun insertValue(v: String) {
-        val wrapped = if (v.startsWith("-")) "($v)" else v
-        val last = expression.lastOrNull()
-        val needsTimes = !justEvaluated && last != null && (last.isLetterOrDigit() || last in ").!%")
+        val wrapped = if (v.startsWith("-") || ' ' in v) "($v)" else v
+        val before = expression.getOrNull(cursor - 1)
+        val needsTimes = !justEvaluated && before != null && (before.isLetterOrDigit() || before in ").!%")
         insert(if (needsTimes) "×$wrapped" else wrapped)
     }
 
     fun evaluateNow() {
         if (expression.isBlank()) return
         try {
-            val v = CalculatorEngine.evaluate(withAns(expression, lastAnswer), angleMode)
-            val r = CalculatorEngine.formatResult(v)
-            if (expression != r) history = (listOf(expression to r) + history).take(100)
-            if (v.isFinite()) {
-                lastAnswer = v
-                expression = r
-                justEvaluated = true
-            }
+            val ev = evaluateAny(withAns(expression, lastAnswer), angleMode, vars)
+            if (expression != ev.text) history = (listOf(expression to ev.text) + history).take(100)
+            val v = ev.value
+            if (v != null && !v.isFinite()) return
+            if (v != null) lastAnswer = v
+            setExpr(ev.text)
+            justEvaluated = true
         } catch (e: Exception) {
             result = errorMessage(e)
             isError = true
+            justEvaluated = false
             errorTick++
             if (hapticOn) haptic.performHapticFeedback(HapticFeedbackType.Reject)
         }
     }
+
+    fun realValueNow(): Double? =
+        runCatching { CalculatorEngine.evaluate(withAns(expression, lastAnswer), angleMode, vars = vars) }.getOrNull()
 
     fun onBtn(action: String, silent: Boolean = false) {
         if (!silent) when (action) {
@@ -233,27 +307,32 @@ fun CalculatorScreen() {
             else -> feedback(HapticFeedbackType.VirtualKey, AudioManager.FX_KEYPRESS_STANDARD)
         }
         when (action) {
-            "⌫" -> { expression = dropLastToken(expression); justEvaluated = false }
-            "AC" -> { expression = ""; result = ""; isError = false; justEvaluated = false }
+            "⌫" -> {
+                val c = cursor.coerceIn(0, expression.length)
+                val before = dropLastToken(expression.substring(0, c))
+                setExpr(before + expression.substring(c), before.length)
+                justEvaluated = false
+            }
+            "AC" -> { setExpr(""); result = ""; isError = false; justEvaluated = false }
             "=" -> evaluateNow()
             "DEG" -> angleMode = AngleMode.entries[(angleMode.ordinal + 1) % AngleMode.entries.size]
             "2nd" -> isSecond = !isSecond
             "MC" -> { memory = 0.0; hasMemory = false; showToast("Memoria borrada", TextSecondary) }
             "MR" -> if (hasMemory) insertValue(plainNumber(memory)) else showToast("Memoria vacía", TextSecondary)
             "M+", "M-" -> {
-                val v = runCatching { CalculatorEngine.evaluate(withAns(expression, lastAnswer), angleMode) }.getOrNull()
+                val v = realValueNow()
                 if (v == null) { showToast("Nada que guardar", TextSecondary); return }
                 memory += if (action == "M+") v else -v
                 hasMemory = true
                 showToast("M = ${CalculatorEngine.formatResult(memory)}")
             }
             "±" -> {
-                expression = when {
+                setExpr(when {
                     expression.isEmpty() -> "-"
                     expression.startsWith("-(") && expression.endsWith(")") -> expression.drop(2).dropLast(1)
                     expression.startsWith("-") -> expression.drop(1)
                     else -> "-($expression)"
-                }
+                })
                 justEvaluated = false
             }
             else -> insert(action)
@@ -317,7 +396,7 @@ fun CalculatorScreen() {
         ),
         listOf(
             BtnDef("π", altLabel = "φ", altAction = "φ"),
-            BtnDef("e"),
+            BtnDef("e", altLabel = "i", altAction = "i"),
             BtnDef("!", altLabel = "Rnd", altAction = "rand"),
             fn("nCr", "ncr(", "nPr", "npr("),
             BtnDef("+", type = BtnType.Op)
@@ -328,7 +407,7 @@ fun CalculatorScreen() {
         BtnDef("⌊x⌋", "floor(", altLabel = "⌈x⌉", altAction = "ceil("),
         BtnDef("gcd", "gcd(", altLabel = "lcm", altAction = "lcm("),
         BtnDef("|x|", "abs("),
-        BtnDef("Rnd", "rand")
+        BtnDef("i")
     )
     val numRows = listOf(
         listOf(BtnDef("MC", type = BtnType.Mem), BtnDef("MR", type = BtnType.Mem),
@@ -350,8 +429,11 @@ fun CalculatorScreen() {
         }
     }
 
-    val showPreview = result.isNotEmpty() && (isError || result != expression)
-    val fraction = if (fractionOn && !isError) resultValue?.let { CalculatorEngine.toFraction(it) } else null
+    val showPreview = !justEvaluated && result.isNotEmpty() && (isError || result != expression)
+    val bigText = if (justEvaluated) result.ifEmpty { expression } else expression
+    val exact = if (fractionOn && !isError) resultValue?.let { CalculatorEngine.toFraction(it) ?: CalculatorEngine.toPiForm(it) } else null
+    val missingParens = (expression.count { it == '(' } - expression.count { it == ')' }).coerceAtLeast(0)
+    val onTapExpr: (Int) -> Unit = { off -> cursor = off.coerceIn(0, expression.length); justEvaluated = false }
 
     // ── UI ────────────────────────────────────────────────────────────────────
     Box(Modifier.fillMaxSize().background(BgColor)) {
@@ -361,22 +443,23 @@ fun CalculatorScreen() {
                 HistoryPanel(
                     history, accent, maxHeight = if (landscape) 150.dp else 260.dp,
                     onPick = { res ->
-                        if (runCatching { CalculatorEngine.evaluate(res, angleMode) }.isSuccess) {
+                        if (runCatching { evaluateAny(res, angleMode, vars) }.isSuccess) {
                             insertValue(res); showHistory = false
                         }
                     },
                     onCopy = { copy(it) },
+                    onShare = { shareHistory() },
                     onClear = { history = emptyList(); showToast("Historial borrado", TextSecondary) },
                     onClose = { showHistory = false }
                 )
             }
 
-            // Display (swipe sideways to delete)
+            // Display (swipe sideways to delete, tap to move the cursor)
             Box(
                 Modifier
                     .weight(if (landscape) 2.3f else 2.6f)
                     .fillMaxWidth()
-                    .background(Brush.verticalGradient(listOf(Color(0xFF0E0E10), BgColor)))
+                    .background(Brush.verticalGradient(listOf(DisplayTop, BgColor)))
                     .pointerInput(Unit) {
                         var total = 0f
                         detectHorizontalDragGestures(
@@ -399,6 +482,7 @@ fun CalculatorScreen() {
                             InfoBadge(angleMode.name, accent) { onBtn("DEG") }
                             if (hasMemory) InfoBadge("M ${CalculatorEngine.formatResult(memory)}", SuccessColor) { onBtn("MR") }
                             if (isSecond) InfoBadge("2nd", accent) { onBtn("2nd") }
+                            if (decimals >= 0) InfoBadge("FIX $decimals", TextSecondary) { tool = Tool.SETTINGS }
                         }
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                             Row(
@@ -425,12 +509,10 @@ fun CalculatorScreen() {
                     Spacer(Modifier.weight(1f))
 
                     if (showPreview) {
-                        Text(
-                            highlight(expression, accent, error = false, dim = true),
-                            fontSize = if (landscape) 18.sp else 24.sp, fontWeight = FontWeight.Light,
-                            textAlign = TextAlign.End, maxLines = 2, overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.fillMaxWidth()
-                        )
+                        ExpressionText(
+                            highlight(expression, accent, error = false, dim = true, ghost = missingParens),
+                            if (landscape) 18.sp else 24.sp, cursor, accent, onTapExpr
+                        ) { copy(expression) }
                         AnimatedContent(
                             targetState = result,
                             transitionSpec = { fadeIn(tween(160)) togetherWith fadeOut(tween(100)) },
@@ -448,20 +530,20 @@ fun CalculatorScreen() {
                             )
                         }
                     } else {
-                        Text(
-                            highlight(expression.ifEmpty { "0" }, accent, error = isError, dim = false),
-                            fontSize = bigFont(expression.length, landscape), fontWeight = FontWeight.Light,
-                            textAlign = TextAlign.End, maxLines = 2, overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.fillMaxWidth().combinedClickable(
-                                interactionSource = remember { MutableInteractionSource() },
-                                indication = null, onClick = {},
-                                onLongClick = { if (expression.isNotEmpty()) copy(expression) }
-                            )
-                        )
+                        ExpressionText(
+                            highlight(bigText.ifEmpty { "0" }, accent, error = isError, dim = false,
+                                ghost = if (justEvaluated) 0 else missingParens),
+                            bigFont(bigText.length, landscape),
+                            cursor.takeIf { expression.isNotEmpty() && !justEvaluated }, accent, onTapExpr
+                        ) { if (bigText.isNotEmpty()) copy(bigText) }
                     }
-                    if (fraction != null && !landscape) {
-                        Text("= $fraction", color = accent, fontSize = 18.sp, textAlign = TextAlign.End,
-                            modifier = Modifier.fillMaxWidth())
+                    if (exact != null && !landscape && exact != bigText) {
+                        Text(
+                            "= $exact", color = accent, fontSize = 18.sp, textAlign = TextAlign.End,
+                            modifier = Modifier.fillMaxWidth().clickable {
+                                setExpr(exact); justEvaluated = false; showToast("Forma exacta")
+                            }
+                        )
                     }
                 }
             }
@@ -512,20 +594,44 @@ fun CalculatorScreen() {
                 when (t) {
                     Tool.CONST -> ConstantsPanel(accent, insertAndClose) { copy(it) }
                     Tool.UNITS -> UnitsPanel(accent, resultValue, insertAndClose)
+                    Tool.GRAPH -> GraphPanel(accent, insertAndClose)
+                    Tool.EQ -> EquationsPanel(accent, insertAndClose)
+                    Tool.MATRIX -> MatrixPanel(accent, insertAndClose) { copy(it) }
                     Tool.STATS -> StatsPanel(accent, insertAndClose)
+                    Tool.FINANCE -> FinancePanel(accent, insertAndClose)
+                    Tool.DATES -> DatesPanel(accent, insertAndClose)
+                    Tool.NUMBERS -> NumbersPanel(accent, insertAndClose)
                     Tool.BASES -> BasesPanel(
                         accent, resultValue?.takeIf { it == floor(it) && abs(it) < 9e15 }?.toLong(), insertAndClose
                     ) { copy(it) }
-                    Tool.GRAPH -> GraphPanel(accent, insertAndClose)
-                    Tool.EQ -> EquationsPanel(accent, insertAndClose)
+                    Tool.VARS -> VarsPanel(
+                        accent, vars, resultValue,
+                        onStore = { c -> resultValue?.let { vars = vars + (c to it); showToast("Guardado en $c") } },
+                        onClear = { c -> vars = vars - c },
+                        onInsert = insertAndClose
+                    )
                     Tool.SETTINGS -> SettingsPanel(
-                        themeIndex, { themeIndex = it },
-                        soundOn, { soundOn = it },
-                        hapticOn, { hapticOn = it },
-                        fractionOn, { fractionOn = it },
-                        history.size
-                    ) { history = emptyList(); showToast("Historial borrado", TextSecondary) }
+                        SettingsState(
+                            themeIndex, { themeIndex = it },
+                            lightMode, { Palette.light = it },
+                            soundOn, { soundOn = it },
+                            hapticOn, { hapticOn = it },
+                            fractionOn, { fractionOn = it },
+                            decimals, { decimals = it },
+                            history.size,
+                            onClearHistory = { history = emptyList(); showToast("Historial borrado", TextSecondary) },
+                            onShareHistory = { shareHistory() },
+                            onTutorial = { tool = null; showTutorial = true }
+                        )
+                    )
                 }
+            }
+        }
+
+        if (showTutorial) {
+            Onboarding(accent) {
+                showTutorial = false
+                prefs.edit().putBoolean("tutorial_done", true).apply()
             }
         }
 
@@ -538,7 +644,7 @@ fun CalculatorScreen() {
         ) {
             Text(
                 toastText, color = toastColor, fontSize = 18.sp, fontWeight = FontWeight.SemiBold,
-                modifier = Modifier.clip(RoundedCornerShape(14.dp)).background(Color(0xEE2C2C2E))
+                modifier = Modifier.clip(RoundedCornerShape(14.dp)).background(ToastBg)
                     .padding(horizontal = 24.dp, vertical = 12.dp)
             )
         }
@@ -557,6 +663,7 @@ private fun dropLastToken(s: String) = TOKEN_END.find(s)?.let { s.removeRange(it
 private fun errorMessage(e: Exception) = when {
     e is ArithmeticException && e.message?.startsWith("Division") == true -> "No se puede dividir entre 0"
     e is ArithmeticException -> "Resultado indefinido"
+    e.message?.startsWith("Variable") == true -> e.message!!
     else -> "Error de sintaxis"
 }
 
@@ -565,6 +672,13 @@ private fun loadHistory(prefs: SharedPreferences): List<Pair<String, String>> =
         val p = line.split('\t')
         if (p.size == 2) p[0] to p[1] else null
     }
+
+private fun loadVars(prefs: SharedPreferences): Map<Char, Double> =
+    prefs.getString("vars", "").orEmpty().split(";").mapNotNull { e ->
+        val p = e.split("=")
+        val v = p.getOrNull(1)?.toDoubleOrNull()
+        if (p.size == 2 && p[0].length == 1 && v != null) p[0][0] to v else null
+    }.toMap()
 
 private fun bigFont(len: Int, landscape: Boolean): TextUnit {
     val size = when {
@@ -577,20 +691,61 @@ private fun bigFont(len: Int, landscape: Boolean): TextUnit {
     return (if (landscape) minOf(size, 34) else size).sp
 }
 
-private fun highlight(expr: String, accent: Color, error: Boolean, dim: Boolean): AnnotatedString =
+private fun highlight(expr: String, accent: Color, error: Boolean, dim: Boolean, ghost: Int): AnnotatedString =
     buildAnnotatedString {
-        val numColor = if (dim) Color(0xFFAEAEB2) else TextPrimary
+        val numColor = if (dim) DimNumColor else TextPrimary
         for (c in expr) {
             val color = when {
                 error -> ErrorColor
                 c.isDigit() || c == '.' -> numColor
-                c in "+−-×÷^%!" -> accent
+                c in "+−-×÷/^%!" -> accent
                 c.isLetter() || c in "√∛" -> accent.copy(alpha = 0.75f)
                 else -> TextSecondary
             }
             withStyle(SpanStyle(color = color)) { append(c) }
         }
+        // Parentheses still to be closed, shown faintly
+        if (ghost > 0) withStyle(SpanStyle(color = TextSecondary.copy(alpha = 0.4f))) { append(")".repeat(ghost)) }
     }
+
+@Composable
+private fun ExpressionText(
+    text: AnnotatedString, fontSize: TextUnit, cursor: Int?, accent: Color,
+    onTap: (Int) -> Unit, onLongPress: () -> Unit
+) {
+    var layout by remember { mutableStateOf<TextLayoutResult?>(null) }
+    val blink = rememberInfiniteTransition(label = "cursor").animateFloat(
+        initialValue = 1f, targetValue = 0f,
+        animationSpec = infiniteRepeatable(keyframes { durationMillis = 1000; 1f at 0; 1f at 500; 0f at 501; 0f at 1000 }),
+        label = "blink"
+    )
+    val tap by rememberUpdatedState(onTap)
+    val longPress by rememberUpdatedState(onLongPress)
+    Text(
+        text, fontSize = fontSize, fontWeight = FontWeight.Light, textAlign = TextAlign.End,
+        maxLines = 3, overflow = TextOverflow.Ellipsis, lineHeight = fontSize * 1.1f,
+        onTextLayout = { layout = it },
+        modifier = Modifier.fillMaxWidth()
+            .pointerInput(Unit) {
+                detectTapGestures(
+                    onTap = { p -> layout?.let { tap(it.getOffsetForPosition(p)) } },
+                    onLongPress = { longPress() }
+                )
+            }
+            .drawWithContent {
+                drawContent()
+                val l = layout
+                if (cursor != null && l != null && cursor <= l.layoutInput.text.length) {
+                    val r = l.getCursorRect(cursor)
+                    drawRect(
+                        accent.copy(alpha = blink.value),
+                        Offset(r.left - 1.dp.toPx(), r.top + r.height * 0.12f),
+                        Size(2.5.dp.toPx(), r.height * 0.76f)
+                    )
+                }
+            }
+    )
+}
 
 @Composable
 private fun InfoBadge(label: String, color: Color, onClick: () -> Unit) {
@@ -654,6 +809,8 @@ private fun CalcBtn(
         label = "btn_scale"
     )
     val shape = RoundedCornerShape(14.dp)
+    val spoken = (SPOKEN[label] ?: label) + (altLabel?.let { ". Mantén presionado: $it" } ?: "")
+    val pressOverlay = if (Palette.light) Color.Black.copy(alpha = 0.08f) else Color.White.copy(alpha = 0.12f)
     Box(
         modifier
             .fillMaxHeight()
@@ -661,8 +818,13 @@ private fun CalcBtn(
             .scale(scale)
             .clip(shape)
             .background(if (accentStyle) Brush.verticalGradient(listOf(bg, bg.copy(alpha = 0.78f))) else SolidColor(bg))
-            .background(Color.White.copy(alpha = if (pressed) 0.12f else 0f))
-            .then(if (accentStyle) Modifier.border(1.dp, accent.copy(alpha = 0.35f), shape) else Modifier)
+            .background(if (pressed) pressOverlay else Color.Transparent)
+            .then(
+                if (accentStyle) Modifier.border(1.dp, accent.copy(alpha = 0.35f), shape)
+                else if (Palette.light) Modifier.border(0.5.dp, Color.Black.copy(alpha = 0.06f), shape)
+                else Modifier
+            )
+            .semantics { contentDescription = spoken; role = Role.Button }
             .combinedClickable(
                 interactionSource = source, indication = null,
                 onClick = onClick, onLongClick = onLongClick
@@ -674,13 +836,14 @@ private fun CalcBtn(
             fontWeight = if (accentStyle) FontWeight.Medium else FontWeight.Light,
             textAlign = TextAlign.Center, maxLines = 1, overflow = TextOverflow.Ellipsis,
             // nudged down so the corner label never overlaps it
-            modifier = Modifier.padding(start = 2.dp, end = 2.dp, top = if (altLabel != null) 8.dp else 0.dp)
+            modifier = Modifier.clearAndSetSemantics {}
+                .padding(start = 2.dp, end = 2.dp, top = if (altLabel != null) 8.dp else 0.dp)
         )
         if (altLabel != null) {
             Text(
                 altLabel, color = if (accentStyle) fg.copy(alpha = 0.7f) else accent.copy(alpha = 0.85f),
                 fontSize = 9.sp, maxLines = 1,
-                modifier = Modifier.align(Alignment.TopEnd).padding(top = 3.dp, end = 6.dp)
+                modifier = Modifier.clearAndSetSemantics {}.align(Alignment.TopEnd).padding(top = 3.dp, end = 6.dp)
             )
         }
     }
@@ -689,9 +852,10 @@ private fun CalcBtn(
 @Composable
 private fun HistoryPanel(
     history: List<Pair<String, String>>, accent: Color, maxHeight: Dp,
-    onPick: (String) -> Unit, onCopy: (String) -> Unit, onClear: () -> Unit, onClose: () -> Unit
+    onPick: (String) -> Unit, onCopy: (String) -> Unit, onShare: () -> Unit,
+    onClear: () -> Unit, onClose: () -> Unit
 ) {
-    Column(Modifier.fillMaxWidth().heightIn(max = maxHeight).background(Color(0xFF242426))) {
+    Column(Modifier.fillMaxWidth().heightIn(max = maxHeight).background(PanelColor)) {
         Row(
             Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically
@@ -699,6 +863,8 @@ private fun HistoryPanel(
             Text("Historial", color = TextPrimary, fontSize = 15.sp, fontWeight = FontWeight.SemiBold,
                 modifier = Modifier.weight(1f))
             if (history.isNotEmpty()) {
+                Text("Compartir", color = accent, fontSize = 13.sp,
+                    modifier = Modifier.clip(RoundedCornerShape(6.dp)).clickable(onClick = onShare).padding(6.dp))
                 Text("Borrar", color = ErrorColor, fontSize = 13.sp,
                     modifier = Modifier.clip(RoundedCornerShape(6.dp)).clickable(onClick = onClear).padding(6.dp))
             }
@@ -724,7 +890,7 @@ private fun HistoryPanel(
                         Text(expr, color = TextSecondary, fontSize = 13.sp)
                         Text("= $res", color = accent, fontSize = 19.sp)
                     }
-                    Box(Modifier.fillMaxWidth().height(0.5.dp).background(Color(0xFF3A3A3C)))
+                    Box(Modifier.fillMaxWidth().height(0.5.dp).background(DividerColor))
                 }
             }
         }
