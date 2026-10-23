@@ -1,9 +1,6 @@
 package com.example.proyectoparcial2
 
 import android.annotation.SuppressLint
-import android.net.ConnectivityManager
-import android.net.NetworkCapabilities
-import android.os.Build
 import android.os.Bundle
 import android.view.View
 import android.view.WindowManager
@@ -45,17 +42,7 @@ class DoomActivity : ComponentActivity() {
         webView.webViewClient = WebViewClient()
         webView.setLayerType(View.LAYER_TYPE_HARDWARE, null)
 
-        if (isOnline()) {
-            webView.loadUrl("https://archive.org/embed/doom-dos")
-        } else {
-            webView.loadData(
-                "<html><body style='background:#000;color:#ff2200;font-family:monospace;" +
-                "display:flex;height:100vh;align-items:center;justify-content:center;text-align:center'>" +
-                "<div><h1>DOOM</h1><p style='color:#888'>No internet connection.<br>" +
-                "Connect and press back to try again.</p></div></body></html>",
-                "text/html", "utf-8"
-            )
-        }
+        webView.loadUrl("file:///android_asset/doom/index.html")
 
         setContentView(webView)
 
@@ -64,17 +51,6 @@ class DoomActivity : ComponentActivity() {
                 if (webView.canGoBack()) webView.goBack() else finish()
             }
         })
-    }
-
-    private fun isOnline(): Boolean {
-        val cm = getSystemService(CONNECTIVITY_SERVICE) as ConnectivityManager
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            cm.getNetworkCapabilities(cm.activeNetwork)
-                ?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) == true
-        } else {
-            @Suppress("DEPRECATION")
-            cm.activeNetworkInfo?.isConnected == true
-        }
     }
 
     override fun onResume() { super.onResume(); webView.onResume() }
