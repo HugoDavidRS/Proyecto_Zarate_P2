@@ -1,12 +1,18 @@
 package com.example.proyectoparcial2
 
-import android.content.Intent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.*
 import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -14,376 +20,397 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.delay
 import kotlin.math.abs
 import kotlin.math.floor
 
-// ── Palette ──────────────────────────────────────────────────────────────────
-private val BgColor       = Color(0xFF1C1C1E)
-private val NumColor      = Color(0xFF3A3A3C)
-private val OpColor       = Color(0xFFFF9F0A)
-private val FuncColor     = Color(0xFF2C2C2E)
-private val ClearColor    = Color(0xFF636366)
-private val MemColor      = Color(0xFF252527)
-private val SecondActive  = Color(0xFFFF9F0A)
-private val EqualColor    = Color(0xFFFF9F0A)
-private val TextPrimary   = Color(0xFFFFFFFF)
-private val TextSecondary = Color(0xFF8E8E93)
-private val TextOp        = Color(0xFFFFFFFF)
-private val ErrorColor    = Color(0xFFFF453A)
-private val DoomColor     = Color(0xFFB22222) // blood red
+// ── Static palette ────────────────────────────────────────────────────────────
+private val BgColor      = Color(0xFF1C1C1E)
+private val NumColor     = Color(0xFF3A3A3C)
+private val FuncColor    = Color(0xFF2C2C2E)
+private val ClearColor   = Color(0xFF636366)
+private val MemColor     = Color(0xFF252527)
+private val TextPrimary  = Color(0xFFFFFFFF)
+private val TextSecondary= Color(0xFF8E8E93)
+private val ErrorColor   = Color(0xFFFF453A)
 
-// ── Button definition ─────────────────────────────────────────────────────────
-private enum class BtnType { Num, Op, Equal, Func, Clear, Mem, Special, Doom }
+// ── Themes (accent colour only — rest of UI is always dark) ──────────────────
+private data class CalcTheme(val name: String, val accent: Color)
+private val THEMES = listOf(
+    CalcTheme("🟠 Naranja",  Color(0xFFFF9F0A)),
+    CalcTheme("🔵 Azul",     Color(0xFF0A84FF)),
+    CalcTheme("🟢 Verde",    Color(0xFF30D158)),
+    CalcTheme("🟣 Morado",   Color(0xFFBF5AF2)),
+)
 
+// ── Button types ──────────────────────────────────────────────────────────────
+private enum class BtnType { Num, Op, Equal, Func, Clear, Mem, Special }
 private data class BtnDef(
     val label: String,
     val action: String = label,
-    val type: BtnType = BtnType.Func,
-    val secondLabel: String? = null,
-    val secondAction: String? = null
+    val type: BtnType = BtnType.Func
 )
 
+// ── Screen ────────────────────────────────────────────────────────────────────
 @Composable
 fun CalculatorScreen() {
-    val context = LocalContext.current
-    var expression by remember { mutableStateOf("") }
-    var result by remember { mutableStateOf("") }
-    var angleMode by remember { mutableStateOf(AngleMode.DEG) }
-    var memory by remember { mutableStateOf(0.0) }
-    var hasMemory by remember { mutableStateOf(false) }
-    var isSecond by remember { mutableStateOf(false) }
-    var lastAnswer by remember { mutableStateOf(0.0) }
-    var history by remember { mutableStateOf(listOf<Pair<String, String>>()) }
+    val haptic    = LocalHapticFeedback.current
+    val clipboard = LocalClipboardManager.current
+
+    // ── State ─────────────────────────────────────────────────────────────────
+    var expression  by remember { mutableStateOf("") }
+    var result      by remember { mutableStateOf("") }
+    var angleMode   by remember { mutableStateOf(AngleMode.DEG) }
+    var memory      by remember { mutableStateOf(0.0) }
+    var hasMemory   by remember { mutableStateOf(false) }
+    var isSecond    by remember { mutableStateOf(false) }
+    var lastAnswer  by remember { mutableStateOf(0.0) }
+    var history     by remember { mutableStateOf(listOf<Pair<String, String>>()) }
     var showHistory by remember { mutableStateOf(false) }
-    var isError by remember { mutableStateOf(false) }
+    var isError     by remember { mutableStateOf(false) }
+    var themeIndex  by remember { mutableStateOf(0) }
+    var showBanner  by remember { mutableStateOf(false) }
+    var showCopied  by remember { mutableStateOf(false) }
+
+    val theme = THEMES[themeIndex]
+
+    // Shake animation for errors
+    val shakeOffset = remember { Animatable(0f) }
+    LaunchedEffect(isError) {
+        if (isError) {
+            shakeOffset.animateTo(0f, keyframes {
+                durationMillis = 380
+                0f at 0; -14f at 55; 14f at 110; -10f at 165; 10f at 220; -5f at 290; 0f at 380
+            })
+        }
+    }
+
+    // Banner auto-hide
+    LaunchedEffect(showBanner) { if (showBanner) { delay(1300); showBanner = false } }
+    LaunchedEffect(showCopied) { if (showCopied) { delay(1100); showCopied = false } }
 
     // Live evaluation
     LaunchedEffect(expression, angleMode) {
         if (expression.isEmpty()) { result = ""; isError = false; return@LaunchedEffect }
         try {
-            val ansVal = if (lastAnswer == floor(lastAnswer) && abs(lastAnswer) < 1e15)
-                lastAnswer.toLong().toString() else lastAnswer.toString()
-            val exprForEval = expression.replace("Ans", ansVal)
-            val v = CalculatorEngine.evaluate(exprForEval, angleMode)
+            val ansVal = ansString(lastAnswer)
+            val v = CalculatorEngine.evaluate(expression.replace("Ans", ansVal), angleMode)
             result = CalculatorEngine.formatResult(v)
             isError = false
-        } catch (_: Exception) {
-            result = ""; isError = false // don't show error while typing
-        }
+        } catch (_: Exception) { result = ""; isError = false }
     }
 
+    // ── Button handler ────────────────────────────────────────────────────────
     fun onBtn(action: String) {
+        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
         when (action) {
             "⌫" -> if (expression.isNotEmpty()) expression = expression.dropLast(1)
             "AC" -> { expression = ""; result = ""; isError = false }
             "=" -> {
                 if (expression.isEmpty()) return
                 try {
-                    val ansVal = if (lastAnswer == floor(lastAnswer) && abs(lastAnswer) < 1e15)
-                        lastAnswer.toLong().toString() else lastAnswer.toString()
-                    val exprForEval = expression.replace("Ans", ansVal)
-                    val v = CalculatorEngine.evaluate(exprForEval, angleMode)
+                    val v = CalculatorEngine.evaluate(
+                        expression.replace("Ans", ansString(lastAnswer)), angleMode)
                     val r = CalculatorEngine.formatResult(v)
                     history = (listOf(expression to r) + history).take(50)
-                    lastAnswer = v
-                    expression = r
-                    result = ""
-                    isError = false
+                    lastAnswer = v; expression = r; result = ""; isError = false
                 } catch (e: Exception) {
-                    result = e.message?.take(20) ?: "Error"
-                    isError = true
+                    result = e.message?.take(22) ?: "Error"; isError = true
                 }
             }
-            "DEG", "RAD", "GRAD" -> {
-                angleMode = when (angleMode) {
-                    AngleMode.DEG -> AngleMode.RAD
-                    AngleMode.RAD -> AngleMode.GRAD
-                    AngleMode.GRAD -> AngleMode.DEG
-                }
+            "DEG" -> angleMode = when (angleMode) {
+                AngleMode.DEG -> AngleMode.RAD
+                AngleMode.RAD -> AngleMode.GRAD
+                AngleMode.GRAD -> AngleMode.DEG
             }
-            "2nd" -> isSecond = !isSecond
-            "MC" -> { memory = 0.0; hasMemory = false }
-            "MR" -> expression += CalculatorEngine.formatResult(memory)
-            "M+" -> {
-                try {
-                    val ansVal = lastAnswer.toString()
-                    memory += CalculatorEngine.evaluate(expression.replace("Ans", ansVal), angleMode)
-                    hasMemory = true
-                } catch (_: Exception) {}
+            "2nd"  -> isSecond = !isSecond
+            "MC"   -> { memory = 0.0; hasMemory = false }
+            "MR"   -> expression += CalculatorEngine.formatResult(memory)
+            "M+"   -> runCatching {
+                memory += CalculatorEngine.evaluate(expression.replace("Ans", ansString(lastAnswer)), angleMode)
+                hasMemory = true
             }
-            "M-" -> {
-                try {
-                    val ansVal = lastAnswer.toString()
-                    memory -= CalculatorEngine.evaluate(expression.replace("Ans", ansVal), angleMode)
-                    hasMemory = true
-                } catch (_: Exception) {}
+            "M-"   -> runCatching {
+                memory -= CalculatorEngine.evaluate(expression.replace("Ans", ansString(lastAnswer)), angleMode)
+                hasMemory = true
             }
-            "±" -> expression = when {
+            "±"    -> expression = when {
                 expression.isEmpty() -> "-"
-                expression.startsWith("-(") && expression.endsWith(")") ->
-                    expression.drop(2).dropLast(1)
+                expression.startsWith("-(") && expression.endsWith(")") -> expression.drop(2).dropLast(1)
                 expression.startsWith("-") -> expression.drop(1)
                 else -> "-($expression)"
             }
-            "Ans" -> expression += "Ans"
+            "Ans"  -> expression += "Ans"
             "HIST" -> showHistory = !showHistory
-            "DOOM" -> context.startActivity(Intent(context, DoomActivity::class.java))
-            else -> {
-                isError = false
-                expression += action
-            }
+            else   -> { isError = false; expression += action }
         }
     }
 
-    // Button grid definition (label, action, type, secondLabel, secondAction)
+    // ── Button grid rows ──────────────────────────────────────────────────────
     val row0 = listOf(
-        BtnDef(angleMode.name, action = "DEG", type = BtnType.Special),
-        BtnDef("DOOM", action = "DOOM", type = BtnType.Doom),
-        BtnDef("(", type = BtnType.Clear),
-        BtnDef(")", type = BtnType.Clear),
-        BtnDef("%", type = BtnType.Clear),
-        BtnDef("⌫", type = BtnType.Clear)
+        BtnDef(angleMode.name, "DEG", BtnType.Special),
+        BtnDef("(",  type = BtnType.Clear), BtnDef(")", type = BtnType.Clear),
+        BtnDef("%",  type = BtnType.Clear), BtnDef("⌫", type = BtnType.Clear)
     )
     val row1 = listOf(
         BtnDef("2nd", type = BtnType.Special),
-        BtnDef(if (isSecond) "√" else "x²", action = if (isSecond) "√(" else "^2"),
-        BtnDef(if (isSecond) "∛" else "x³", action = if (isSecond) "cbrt(" else "^3"),
-        BtnDef("xⁿ", action = "^"),
+        BtnDef(if (isSecond) "√"    else "x²",  if (isSecond) "√("  else "^2"),
+        BtnDef(if (isSecond) "∛"    else "x³",  if (isSecond) "cbrt(" else "^3"),
+        BtnDef("xⁿ", "^"),
         BtnDef("÷", type = BtnType.Op)
     )
     val row2 = listOf(
-        BtnDef(if (isSecond) "asin" else "sin", action = if (isSecond) "asin(" else "sin("),
-        BtnDef(if (isSecond) "acos" else "cos", action = if (isSecond) "acos(" else "cos("),
-        BtnDef(if (isSecond) "atan" else "tan", action = if (isSecond) "atan(" else "tan("),
-        BtnDef(if (isSecond) "10^x" else "log", action = if (isSecond) "10^" else "log("),
+        BtnDef(if (isSecond) "asin" else "sin",  if (isSecond) "asin(" else "sin("),
+        BtnDef(if (isSecond) "acos" else "cos",  if (isSecond) "acos(" else "cos("),
+        BtnDef(if (isSecond) "atan" else "tan",  if (isSecond) "atan(" else "tan("),
+        BtnDef(if (isSecond) "10^x" else "log",  if (isSecond) "10^"   else "log("),
         BtnDef("×", type = BtnType.Op)
     )
     val row3 = listOf(
-        BtnDef(if (isSecond) "asinh" else "sinh", action = if (isSecond) "asinh(" else "sinh("),
-        BtnDef(if (isSecond) "acosh" else "cosh", action = if (isSecond) "acosh(" else "cosh("),
-        BtnDef(if (isSecond) "atanh" else "tanh", action = if (isSecond) "atanh(" else "tanh("),
-        BtnDef(if (isSecond) "eˣ" else "ln", action = if (isSecond) "exp(" else "ln("),
-        BtnDef("−", action = "-", type = BtnType.Op)
+        BtnDef(if (isSecond) "asinh" else "sinh", if (isSecond) "asinh(" else "sinh("),
+        BtnDef(if (isSecond) "acosh" else "cosh", if (isSecond) "acosh(" else "cosh("),
+        BtnDef(if (isSecond) "atanh" else "tanh", if (isSecond) "atanh(" else "tanh("),
+        BtnDef(if (isSecond) "eˣ"   else "ln",   if (isSecond) "exp("   else "ln("),
+        BtnDef("−", "-", BtnType.Op)
     )
     val row4 = listOf(
-        BtnDef("π", action = "π"),
-        BtnDef("e", action = "e"),
-        BtnDef("!", action = "!"),
-        BtnDef(if (isSecond) "nPr" else "nCr", action = if (isSecond) "npr(" else "ncr("),
+        BtnDef("π"), BtnDef("e"), BtnDef("!"),
+        BtnDef(if (isSecond) "nPr" else "nCr", if (isSecond) "npr(" else "ncr("),
         BtnDef("+", type = BtnType.Op)
     )
-    // Memory + number pad rows (4 cols, = button spans right)
-    val memRow = listOf(
-        BtnDef("MC", type = BtnType.Mem),
-        BtnDef("MR", type = BtnType.Mem),
-        BtnDef("M+", type = BtnType.Mem),
-        BtnDef("M-", type = BtnType.Mem)
-    )
-    val numRow1 = listOf(
-        BtnDef("7", type = BtnType.Num), BtnDef("8", type = BtnType.Num),
-        BtnDef("9", type = BtnType.Num), BtnDef("1/x", action = "rec(")
-    )
-    val numRow2 = listOf(
-        BtnDef("4", type = BtnType.Num), BtnDef("5", type = BtnType.Num),
-        BtnDef("6", type = BtnType.Num), BtnDef("mod", action = " mod ")
-    )
-    val numRow3 = listOf(
-        BtnDef("1", type = BtnType.Num), BtnDef("2", type = BtnType.Num),
-        BtnDef("3", type = BtnType.Num), BtnDef("EE", action = "×10^")
-    )
-    val numRow4 = listOf(
-        BtnDef("±", type = BtnType.Num), BtnDef("0", type = BtnType.Num),
-        BtnDef(".", type = BtnType.Num), BtnDef("Ans")
-    )
+    val memRow  = listOf(BtnDef("MC", type=BtnType.Mem), BtnDef("MR", type=BtnType.Mem),
+                         BtnDef("M+", type=BtnType.Mem), BtnDef("M-", type=BtnType.Mem))
+    val numRow1 = listOf(BtnDef("7",BtnType.Num),BtnDef("8",BtnType.Num),BtnDef("9",BtnType.Num),BtnDef("1/x","rec("))
+    val numRow2 = listOf(BtnDef("4",BtnType.Num),BtnDef("5",BtnType.Num),BtnDef("6",BtnType.Num),BtnDef("mod"," mod "))
+    val numRow3 = listOf(BtnDef("1",BtnType.Num),BtnDef("2",BtnType.Num),BtnDef("3",BtnType.Num),BtnDef("EE","×10^"))
+    val numRow4 = listOf(BtnDef("±",BtnType.Num), BtnDef("0",BtnType.Num), BtnDef(".",BtnType.Num), BtnDef("Ans"))
 
-    Column(
-        Modifier
-            .fillMaxSize()
-            .background(BgColor)
-            .systemBarsPadding()
-    ) {
-        // History panel
-        AnimatedVisibility(
-            visible = showHistory,
-            enter = expandVertically(),
-            exit = shrinkVertically()
-        ) {
-            HistoryPanel(history) { showHistory = false }
-        }
+    // ── UI ────────────────────────────────────────────────────────────────────
+    Box(Modifier.fillMaxSize().background(BgColor)) {
 
-        // Display
-        DisplayArea(
-            expression = expression,
-            result = result,
-            isError = isError,
-            hasMemory = hasMemory,
-            angleMode = angleMode,
-            isSecond = isSecond,
-            showHistory = showHistory,
-            modifier = Modifier.weight(2.5f),
-            onHistoryClick = { showHistory = !showHistory }
-        )
+        Column(Modifier.fillMaxSize().systemBarsPadding()) {
 
-        // Scientific rows
-        Column(Modifier.weight(7.5f)) {
-            for (row in listOf(row0, row1, row2, row3, row4)) {
-                BtnRow(Modifier.weight(1f), row, isSecond) { onBtn(it) }
+            // History panel
+            AnimatedVisibility(showHistory, enter = expandVertically(), exit = shrinkVertically()) {
+                HistoryPanel(history) { showHistory = false }
             }
-            // Number pad + spanning = button
-            Row(Modifier.weight(5f)) {
-                Column(Modifier.weight(4f)) {
-                    for (row in listOf(memRow, numRow1, numRow2, numRow3, numRow4)) {
-                        BtnRow(Modifier.weight(1f), row, isSecond) { onBtn(it) }
+
+            // Display
+            Column(
+                Modifier
+                    .weight(2.5f)
+                    .fillMaxWidth()
+                    .offset(x = shakeOffset.value.dp)
+                    .combinedClickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                        onClick = {},
+                        onLongClick = {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            themeIndex = (themeIndex + 1) % THEMES.size
+                            showBanner = true
+                        }
+                    )
+                    .padding(horizontal = 14.dp, vertical = 6.dp)
+            ) {
+                // Badges + history
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        ThemeBadge(angleMode.name, theme.accent)
+                        if (hasMemory) ThemeBadge("M", Color(0xFF30D158))
+                        if (isSecond)  ThemeBadge("2nd", theme.accent)
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        verticalAlignment = Alignment.CenterVertically) {
+                        Text("🎨", fontSize = 12.sp, modifier = Modifier.combinedClickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null, onClick = {},
+                            onLongClick = {}
+                        ))
+                        Text(
+                            if (showHistory) "▲" else "▼ Historial",
+                            color = TextSecondary, fontSize = 12.sp,
+                            modifier = Modifier.combinedClickable(
+                                interactionSource = remember { MutableInteractionSource() },
+                                indication = null, onClick = { onBtn("HIST") }, onLongClick = {}
+                            )
+                        )
                     }
                 }
-                // = button spanning all 5 number rows
-                Box(
-                    Modifier
-                        .weight(1f)
-                        .fillMaxHeight()
-                        .padding(3.dp)
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(EqualColor)
-                        .clickable { onBtn("=") },
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text("=", color = TextPrimary, fontSize = 32.sp, fontWeight = FontWeight.Light)
+
+                Spacer(Modifier.weight(1f))
+
+                // Expression
+                Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.End) {
+                    Text(
+                        expression.ifEmpty { "0" },
+                        color = if (isError) ErrorColor else TextSecondary,
+                        fontSize = 22.sp, fontWeight = FontWeight.Light,
+                        maxLines = 2, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.End
+                    )
+                }
+
+                // Result (long-press to copy)
+                if (result.isNotEmpty()) {
+                    Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.End) {
+                        Text(
+                            result,
+                            color = if (isError) ErrorColor else TextPrimary,
+                            fontSize = adaptFontSize(result), fontWeight = FontWeight.Light,
+                            maxLines = 1, textAlign = TextAlign.End,
+                            modifier = Modifier.combinedClickable(
+                                interactionSource = remember { MutableInteractionSource() },
+                                indication = null, onClick = {},
+                                onLongClick = {
+                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    clipboard.setText(AnnotatedString(result))
+                                    showCopied = true
+                                }
+                            )
+                        )
+                    }
+                }
+
+                Spacer(Modifier.height(4.dp))
+            }
+
+            // Buttons
+            Column(Modifier.weight(7.5f)) {
+                for (row in listOf(row0, row1, row2, row3, row4)) {
+                    BtnRow(Modifier.weight(1f), row, isSecond, theme.accent) { onBtn(it) }
+                }
+                Row(Modifier.weight(5f)) {
+                    Column(Modifier.weight(4f)) {
+                        for (row in listOf(memRow, numRow1, numRow2, numRow3, numRow4)) {
+                            BtnRow(Modifier.weight(1f), row, isSecond, theme.accent) { onBtn(it) }
+                        }
+                    }
+                    // Big = button
+                    Box(
+                        Modifier.weight(1f).fillMaxHeight().padding(3.dp)
+                            .clip(RoundedCornerShape(14.dp))
+                            .background(theme.accent)
+                            .combinedClickable(
+                                interactionSource = remember { MutableInteractionSource() },
+                                indication = null,
+                                onClick = { onBtn("=") }, onLongClick = {}
+                            ),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text("=", color = Color.White, fontSize = 34.sp, fontWeight = FontWeight.Light)
+                    }
                 }
             }
         }
-    }
-}
 
-@Composable
-private fun DisplayArea(
-    expression: String, result: String, isError: Boolean,
-    hasMemory: Boolean, angleMode: AngleMode, isSecond: Boolean,
-    showHistory: Boolean, modifier: Modifier, onHistoryClick: () -> Unit
-) {
-    Column(
-        modifier
-            .fillMaxWidth()
-            .padding(horizontal = 12.dp, vertical = 4.dp)
-    ) {
-        // Top row: badges + history toggle
-        Row(
-            Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
+        // Theme banner overlay
+        AnimatedVisibility(
+            visible = showBanner,
+            enter = fadeIn() + scaleIn(initialScale = 0.75f),
+            exit = fadeOut() + scaleOut(targetScale = 0.85f),
+            modifier = Modifier.align(Alignment.Center)
         ) {
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                Badge(angleMode.name, OpColor)
-                if (hasMemory) Badge("M", Color(0xFF30D158))
-                if (isSecond) Badge("2nd", SecondActive)
-            }
-            Text(
-                if (showHistory) "▲ History" else "▼ History",
-                color = TextSecondary, fontSize = 12.sp,
-                modifier = Modifier.clickable { onHistoryClick() }
-            )
-        }
-        Spacer(Modifier.weight(1f))
-        // Expression line
-        val scrollState = rememberScrollState()
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .horizontalScroll(scrollState),
-            horizontalArrangement = Arrangement.End
-        ) {
-            Text(
-                text = expression.ifEmpty { "0" },
-                color = if (isError) ErrorColor else TextSecondary,
-                fontSize = 22.sp,
-                fontWeight = FontWeight.Light,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-                textAlign = TextAlign.End
-            )
-        }
-        // Result line
-        if (result.isNotEmpty()) {
-            val scrollState2 = rememberScrollState()
-            Row(
+            Box(
                 Modifier
-                    .fillMaxWidth()
-                    .horizontalScroll(scrollState2),
-                horizontalArrangement = Arrangement.End
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(Color(0xDD2C2C2E))
+                    .padding(horizontal = 28.dp, vertical = 14.dp)
             ) {
-                Text(
-                    text = result,
-                    color = if (isError) ErrorColor else TextPrimary,
-                    fontSize = adaptiveFontSize(result),
-                    fontWeight = FontWeight.Light,
-                    maxLines = 1,
-                    textAlign = TextAlign.End
-                )
+                Text(THEMES[themeIndex].name, color = theme.accent, fontSize = 20.sp,
+                    fontWeight = FontWeight.SemiBold)
             }
         }
-        Spacer(Modifier.height(4.dp))
+
+        // "¡Copiado!" toast
+        AnimatedVisibility(
+            visible = showCopied,
+            enter = fadeIn() + scaleIn(initialScale = 0.8f),
+            exit = fadeOut(),
+            modifier = Modifier.align(Alignment.Center)
+        ) {
+            Box(
+                Modifier
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(Color(0xDD2C2C2E))
+                    .padding(horizontal = 20.dp, vertical = 10.dp)
+            ) {
+                Text("✓ Copiado", color = Color(0xFF30D158), fontSize = 16.sp,
+                    fontWeight = FontWeight.SemiBold)
+            }
+        }
     }
 }
 
-private fun adaptiveFontSize(s: String): TextUnit = when {
-    s.length <= 9 -> 52.sp
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+private fun ansString(v: Double) =
+    if (v == floor(v) && abs(v) < 1e15) v.toLong().toString() else v.toString()
+
+private fun adaptFontSize(s: String): TextUnit = when {
+    s.length <= 9  -> 52.sp
     s.length <= 14 -> 40.sp
     s.length <= 20 -> 30.sp
-    else -> 22.sp
+    else           -> 22.sp
 }
 
+private fun BtnDef(label: String, type: BtnType) = BtnDef(label, label, type)
+
 @Composable
-private fun Badge(label: String, color: Color) {
+private fun ThemeBadge(label: String, color: Color) {
     Box(
-        Modifier
-            .clip(RoundedCornerShape(4.dp))
-            .background(color.copy(alpha = 0.2f))
-            .padding(horizontal = 6.dp, vertical = 2.dp)
-    ) {
-        Text(label, color = color, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
-    }
+        Modifier.clip(RoundedCornerShape(4.dp))
+            .background(color.copy(alpha = 0.18f))
+            .padding(horizontal = 7.dp, vertical = 2.dp)
+    ) { Text(label, color = color, fontSize = 11.sp, fontWeight = FontWeight.SemiBold) }
 }
 
 @Composable
-private fun BtnRow(modifier: Modifier, buttons: List<BtnDef>, isSecond: Boolean, onClick: (String) -> Unit) {
+private fun BtnRow(
+    modifier: Modifier, buttons: List<BtnDef>,
+    isSecond: Boolean, accent: Color,
+    onClick: (String) -> Unit
+) {
     Row(modifier.fillMaxWidth()) {
         for (btn in buttons) {
-            val isSecondBtn = btn.label == "2nd"
-            val bgColor = when {
-                isSecondBtn && isSecond -> SecondActive
-                btn.type == BtnType.Doom -> DoomColor
-                btn.type == BtnType.Num -> NumColor
-                btn.type == BtnType.Op -> OpColor
-                btn.type == BtnType.Clear -> ClearColor
-                btn.type == BtnType.Mem -> MemColor
+            val is2nd = btn.label == "2nd"
+            val bg = when {
+                is2nd && isSecond   -> accent
+                btn.type == BtnType.Num     -> NumColor
+                btn.type == BtnType.Op      -> accent
+                btn.type == BtnType.Clear   -> ClearColor
+                btn.type == BtnType.Mem     -> MemColor
                 btn.type == BtnType.Special -> ClearColor
-                else -> FuncColor
+                else                        -> FuncColor
             }
-            val textColor = when (btn.type) {
-                BtnType.Num -> TextPrimary
-                BtnType.Op -> TextOp
-                BtnType.Clear -> TextPrimary
+            val fg = when (btn.type) {
                 BtnType.Mem -> TextSecondary
-                BtnType.Doom -> TextPrimary
-                else -> if (isSecond && btn.label != "2nd") OpColor else TextPrimary
+                else -> if (isSecond && !is2nd) accent else TextPrimary
             }
-            CalcBtn(
-                label = btn.label,
-                bg = bgColor,
-                fg = textColor,
-                modifier = Modifier.weight(1f),
-                fontSize = if (btn.label.length > 4) 13.sp else if (btn.label.length > 3) 15.sp else 20.sp
-            ) { onClick(btn.action) }
+            val fs = when {
+                btn.label.length > 5 -> 12.sp
+                btn.label.length > 4 -> 13.sp
+                btn.label.length > 3 -> 15.sp
+                else                 -> 20.sp
+            }
+            CalcBtn(btn.label, bg, fg, Modifier.weight(1f), fs) { onClick(btn.action) }
         }
     }
 }
@@ -394,64 +421,62 @@ private fun CalcBtn(
     modifier: Modifier, fontSize: TextUnit = 20.sp,
     onClick: () -> Unit
 ) {
+    val haptic = LocalHapticFeedback.current
+    val source = remember { MutableInteractionSource() }
+    val pressed by source.collectIsPressedAsState()
+    val scale by animateFloatAsState(
+        targetValue = if (pressed) 0.87f else 1f,
+        animationSpec = spring(dampingRatio = 0.55f, stiffness = 750f),
+        label = "btn_scale"
+    )
     Box(
         modifier
             .fillMaxHeight()
             .padding(3.dp)
-            .clip(RoundedCornerShape(12.dp))
+            .scale(scale)
+            .clip(RoundedCornerShape(13.dp))
             .background(bg)
-            .clickable(onClick = onClick),
+            .combinedClickable(
+                interactionSource = source, indication = null,
+                onClick = { haptic.performHapticFeedback(HapticFeedbackType.LongPress); onClick() },
+                onLongClick = {}
+            ),
         contentAlignment = Alignment.Center
     ) {
-        Text(
-            text = label,
-            color = fg,
-            fontSize = fontSize,
-            fontWeight = FontWeight.Light,
-            textAlign = TextAlign.Center,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.padding(horizontal = 2.dp)
-        )
+        Text(label, color = fg, fontSize = fontSize, fontWeight = FontWeight.Light,
+            textAlign = TextAlign.Center, maxLines = 1, overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(horizontal = 2.dp))
     }
 }
 
 @Composable
 private fun HistoryPanel(history: List<Pair<String, String>>, onClose: () -> Unit) {
     Column(
-        Modifier
-            .fillMaxWidth()
-            .heightIn(max = 200.dp)
-            .background(Color(0xFF2C2C2E))
+        Modifier.fillMaxWidth().heightIn(max = 200.dp).background(Color(0xFF2C2C2E))
     ) {
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 6.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text("History", color = TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
-            Text("✕", color = TextSecondary, fontSize = 14.sp, modifier = Modifier.clickable { onClose() })
+        Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 7.dp),
+            horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+            Text("Historial", color = TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+            Text("✕", color = TextSecondary, fontSize = 15.sp,
+                modifier = Modifier.combinedClickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null, onClick = onClose, onLongClick = {}
+                ))
         }
         if (history.isEmpty()) {
             Box(Modifier.fillMaxWidth().padding(16.dp), contentAlignment = Alignment.Center) {
-                Text("No history yet", color = TextSecondary, fontSize = 13.sp)
+                Text("Sin historial aún", color = TextSecondary, fontSize = 13.sp)
             }
         } else {
             LazyColumn {
                 items(history) { (expr, res) ->
-                    Column(
-                        Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 16.dp, vertical = 4.dp)
-                    ) {
-                        Text(expr, color = TextSecondary, fontSize = 13.sp, textAlign = TextAlign.End,
-                            modifier = Modifier.fillMaxWidth())
-                        Text(res, color = TextPrimary, fontSize = 18.sp, textAlign = TextAlign.End,
-                            modifier = Modifier.fillMaxWidth())
+                    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 5.dp)) {
+                        Text(expr, color = TextSecondary, fontSize = 13.sp,
+                            textAlign = TextAlign.End, modifier = Modifier.fillMaxWidth())
+                        Text(res, color = TextPrimary, fontSize = 19.sp,
+                            textAlign = TextAlign.End, modifier = Modifier.fillMaxWidth())
                     }
-                    Box(Modifier.fillMaxWidth().height(0.5.dp).background(Color(0xFF48484A)))
+                    Box(Modifier.fillMaxWidth().height(0.5.dp).background(Color(0xFF3A3A3C)))
                 }
             }
         }
